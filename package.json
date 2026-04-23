@@ -1,0 +1,29 @@
+{
+  "name": "velo",
+  "version": "1.0.0",
+  "description": "A low-level Node.js HTTP server library",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./validation": "./dist/validation.js",
+    "./static": "./dist/static.js",
+    "./server": "./dist/server.js",
+    "./request": "./dist/request.js",
+    "./response": "./dist/response.js",
+    "./middleware": "./dist/middleware.js",
+    "./plugin": "./dist/plugin.js",
+    "./errors": "./dist/errors.js"
+  },
+  "scripts": {
+    "test": "node --test --import tsx tests/*.test.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0",
+    "ws": "^8.20.0"
+  }
+}

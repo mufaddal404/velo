@@ -1,0 +1,13 @@
+- Initialized project with TypeScript and ESM.
+- Implemented `VeloError` and subclasses in `src/errors.ts`.
+- Implemented `Request` and `Response` wrappers in `src/request.ts` and `src/response.ts`.
+- Implemented radix tree `Router` in `src/router.ts` (distinguishes between 404 and 405).
+- Implemented middleware pipeline in `src/middleware.ts`.
+- Implemented core `Velo` class in `src/server.ts` with support for routing, middleware, plugins, and WebSockets.
+- Implemented built-in `v` validator in `src/validation.ts`.
+- Implemented `staticFiles` plugin in `src/static.ts` with ETag, Range, and Path Traversal protection.
+- Implemented RFC 6455 WebSocket support in `src/websocket.ts`.
+- Exported public API in `src/index.ts`.
+- Wrote comprehensive tests in `tests/` for all modules (47 tests passing).
+- Passed `npx tsc --noEmit` with zero errors.
+- Created `README.md` with usage examples.
