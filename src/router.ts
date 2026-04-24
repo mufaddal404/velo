@@ -22,9 +22,17 @@ class Node<T> {
 export class Router<T = any> {
   private root = new Node<T>();
 
+  private normalizePath(path: string): string {
+    let p = path.replace(/\/+/g, "/");
+    if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+    if (!p.startsWith("/")) p = "/" + p;
+    return p;
+  }
+
   add(method: string, path: string, handlers: T) {
+    const normalizedPath = this.normalizePath(path);
     const methodUpper = method.toUpperCase();
-    this._add(this.root, path, methodUpper, handlers);
+    this._add(this.root, normalizedPath, methodUpper, handlers);
   }
 
   private _add(node: Node<T>, path: string, method: string, handlers: T) {
@@ -101,6 +109,7 @@ export class Router<T = any> {
   }
 
   match(method: string, path: string): { result: RouteResult<T> | null; methodNotAllowed: boolean } {
+    const normalizedPath = this.normalizePath(path);
     const methodUpper = method.toUpperCase();
     let methodMatched = false;
     let finalResult: RouteResult<T> | null = null;
@@ -154,7 +163,7 @@ export class Router<T = any> {
       return !!finalResult && finalResult.params["*"] !== undefined;
     };
 
-    search(this.root, path, {});
+    search(this.root, normalizedPath, {});
 
     return { result: finalResult, methodNotAllowed: !finalResult && methodMatched };
   }

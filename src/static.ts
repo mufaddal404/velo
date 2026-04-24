@@ -1,8 +1,10 @@
-import { join, resolve, normalize, sep, extname, posix } from "node:path";
+import { join, resolve, normalize, sep, extname } from "node:path";
 import { createReadStream, promises as fs } from "node:fs";
+import { PassThrough } from "node:stream";
 import { ForbiddenError, NotFoundError } from "./errors.js";
 import { type Plugin } from "./plugin.js";
 import { type Context } from "./middleware.js";
+import { type Readable } from "node:stream";
 
 export interface StaticOptions {
   root: string;
@@ -101,35 +103,81 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
     }
 
     // Range
-    const range = ctx.req.header("range");
-    if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
-      let start: number;
-      let end: number;
-
-      if (parts[0] === "") {
-        // Suffix range: bytes=-500
-        const suffix = parseInt(parts[1], 10);
-        if (isNaN(suffix)) {
-          ctx.res.status(416).set("Content-Range", `bytes */${stats.size}`).send();
-          return;
+    const rangeHeader = ctx.req.header("range");
+    if (rangeHeader && rangeHeader.startsWith("bytes=")) {
+      const ranges: { start: number; end: number }[] = [];
+      const rangeSpecs = rangeHeader.slice(6).split(",");
+      
+      for (const spec of rangeSpecs) {
+        const parts = spec.split("-");
+        if (parts.length !== 2) continue;
+        
+        const startStr = parts[0].trim();
+        const endStr = parts[1].trim();
+        let start: number;
+        let end: number;
+        
+        if (startStr === "") {
+          const suffix = parseInt(endStr, 10);
+          if (isNaN(suffix)) continue;
+          start = Math.max(0, stats.size - suffix);
+          end = stats.size - 1;
+        } else {
+          start = parseInt(startStr, 10);
+          if (isNaN(start)) continue;
+          if (endStr === "") {
+            end = stats.size - 1;
+          } else {
+            end = parseInt(endStr, 10);
+            if (isNaN(end)) continue;
+          }
         }
-        start = Math.max(0, stats.size - suffix);
-        end = stats.size - 1;
-      } else {
-        start = parseInt(parts[0], 10);
-        end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+        
+        if (start < stats.size && start <= end) {
+          ranges.push({ start, end: Math.min(end, stats.size - 1) });
+        }
       }
 
-      if (isNaN(start) || isNaN(end) || start >= stats.size || end >= stats.size || start > end) {
+      if (ranges.length === 0) {
         ctx.res.status(416).set("Content-Range", `bytes */${stats.size}`).send();
         return;
       }
 
-      ctx.res.status(206);
-      ctx.res.set("Content-Range", `bytes ${start}-${end}/${stats.size}`);
-      ctx.res.set("Content-Length", (end - start + 1).toString());
-      ctx.res.stream(createReadStream(targetFile, { start, end }));
+      if (ranges.length === 1) {
+        const { start, end } = ranges[0];
+        ctx.res.status(206);
+        ctx.res.set("Content-Range", `bytes ${start}-${end}/${stats.size}`);
+        ctx.res.set("Content-Length", (end - start + 1).toString());
+        ctx.res.stream(createReadStream(targetFile, { start, end }));
+      } else {
+        const boundary = `VELO_BOUNDARY_${Date.now().toString(36)}`;
+        const contentType = ctx.res.get("content-type") || "application/octet-stream";
+        
+        ctx.res.status(206);
+        ctx.res.set("Content-Type", `multipart/byteranges; boundary=${boundary}`);
+        
+        const out = new PassThrough();
+        ctx.res.stream(out);
+        
+        (async () => {
+          try {
+            for (const { start, end } of ranges) {
+              out.write(`--${boundary}\r\n`);
+              out.write(`Content-Type: ${contentType}\r\n`);
+              out.write(`Content-Range: bytes ${start}-${end}/${stats.size}\r\n\r\n`);
+              
+              const stream = createReadStream(targetFile, { start, end });
+              for await (const chunk of stream) {
+                out.write(chunk);
+              }
+              out.write("\r\n");
+            }
+            out.end(`--${boundary}--\r\n`);
+          } catch (err) {
+            out.destroy(err instanceof Error ? err : new Error(String(err)));
+          }
+        })();
+      }
     } else {
       ctx.res.set("Content-Length", stats.size.toString());
       ctx.res.stream(createReadStream(targetFile));

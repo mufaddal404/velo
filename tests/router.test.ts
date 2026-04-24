@@ -91,3 +91,17 @@ test("Router - 9. Known path with wrong method returns 405", async () => {
     await app.close();
   }
 });
+
+test("Router - 10. Path normalization (double slashes and trailing slashes)", () => {
+  const router = new Router();
+  const handler = () => {};
+  router.add("GET", "/users/profile", [handler]);
+  
+  assert.ok(router.match("GET", "/users/profile/").result, "Should match trailing slash");
+  assert.ok(router.match("GET", "/users//profile").result, "Should match double slash");
+  assert.ok(router.match("GET", "//users///profile//").result, "Should match multiple slashes");
+  
+  const router2 = new Router();
+  router2.add("GET", "/users/profile/", [handler]); // Added with trailing slash
+  assert.ok(router2.match("GET", "/users/profile").result, "Should match without trailing slash");
+});

@@ -4,6 +4,7 @@ import { Velo } from "../src/server.js";
 import { staticFiles } from "../src/static.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as http from "node:http";
 
 const PUBLIC_DIR = "./tests/public";
 
@@ -37,8 +38,6 @@ test("Static - 44. Non-existent file returns 404", async () => {
     await app.close();
   }
 });
-
-import * as http from "node:http";
 
 test("Static - 45. Path with .. returns 403", async () => {
   const app = new Velo();
@@ -263,6 +262,33 @@ test("Static - Path Traversal with encoded characters", async () => {
       req.end();
     });
     assert.strictEqual(res.statusCode, 403);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Static - Multiple Ranges (multipart/byteranges)", async () => {
+  if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
+  fs.writeFileSync(path.join(PUBLIC_DIR, "multi-range.txt"), "0123456789abcdefghij");
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/multi-range.txt`, {
+      headers: { "Range": "bytes=0-1, 10-11, 18-19" }
+    });
+    assert.strictEqual(res.status, 206);
+    const contentType = res.headers.get("content-type") || "";
+    assert.ok(contentType.includes("multipart/byteranges"));
+    
+    const body = await res.text();
+    assert.ok(body.includes("01"));
+    assert.ok(body.includes("ab"));
+    assert.ok(body.includes("ij"));
+    assert.ok(body.includes("Content-Range: bytes 0-1/20"));
+    assert.ok(body.includes("Content-Range: bytes 10-11/20"));
+    assert.ok(body.includes("Content-Range: bytes 18-19/20"));
   } finally {
     await app.close();
   }
