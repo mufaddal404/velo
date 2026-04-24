@@ -15,24 +15,43 @@ export interface VeloOptions {
 
 export class Velo {
   protected server?: Server;
-  protected router = new Router();
-  protected wsRouter = new Router();
+  protected router: Router;
+  protected wsRouter: Router;
   protected middlewares: { prefix: string; fn: Middleware }[] = [];
-  protected _errorHandler: ErrorHandler = this.defaultErrorHandler.bind(this);
-  protected _notFoundHandler: Handler = (ctx) => {
-    throw new NotFoundError();
-  };
+  protected _errorHandler: ErrorHandler;
+  protected _notFoundHandler: Handler;
   
-  constructor(protected _options: VeloOptions = {}) {
+  protected parent: Velo | null = null;
+  protected basePath: string = "";
+  protected connections = new Set<any>();
+
+  constructor(protected _options: VeloOptions = {}, parent: Velo | null = null, basePath: string = "") {
+    this.parent = parent;
+    this.basePath = basePath;
+    
+    if (parent) {
+      this.router = parent.router;
+      this.wsRouter = parent.wsRouter;
+      this._errorHandler = parent._errorHandler;
+      this._notFoundHandler = parent._notFoundHandler;
+      this.connections = parent.connections;
+    } else {
+      this.router = new Router();
+      this.wsRouter = new Router();
+      this._errorHandler = this.defaultErrorHandler.bind(this);
+      this._notFoundHandler = (ctx) => {
+        throw new NotFoundError();
+      };
+    }
   }
 
   use(middleware: Middleware): this;
   use(prefix: string, middleware: Middleware): this;
   use(arg1: string | Middleware, arg2?: Middleware): this {
     if (typeof arg1 === "string") {
-      this.middlewares.push({ prefix: arg1, fn: arg2! });
+      this.middlewares.push({ prefix: this.basePath + arg1, fn: arg2! });
     } else {
-      this.middlewares.push({ prefix: "/", fn: arg1 });
+      this.middlewares.push({ prefix: this.basePath, fn: arg1 });
     }
     return this;
   }
@@ -47,12 +66,18 @@ export class Velo {
   all(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("ALL", path, handlers); return this; }
 
   ws(path: string, handler: WebSocketHandler) {
-    this.wsRouter.add("GET", path, [handler]);
+    const fullPath = this.basePath + path;
+    const handlers: any = [handler];
+    handlers.scope = this;
+    this.wsRouter.add("GET", fullPath, handlers);
     return this;
   }
 
   private addRoute(method: string, path: string, handlers: (Handler | Middleware)[]) {
-    this.router.add(method, path, handlers.map(h => this.wrapHandler(h)));
+    const fullPath = this.basePath + path;
+    const wrappedHandlers: any = handlers.map(h => this.wrapHandler(h));
+    wrappedHandlers.scope = this;
+    this.router.add(method, fullPath, wrappedHandlers);
   }
 
   private wrapHandler(handler: Handler | Middleware): Middleware {
@@ -63,21 +88,7 @@ export class Velo {
   }
 
   group(prefix: string) {
-    return {
-      get: (path: string, ...handlers: (Handler | Middleware)[]) => this.get(prefix + path, ...handlers),
-      post: (path: string, ...handlers: (Handler | Middleware)[]) => this.post(prefix + path, ...handlers),
-      put: (path: string, ...handlers: (Handler | Middleware)[]) => this.put(prefix + path, ...handlers),
-      patch: (path: string, ...handlers: (Handler | Middleware)[]) => this.patch(prefix + path, ...handlers),
-      delete: (path: string, ...handlers: (Handler | Middleware)[]) => this.delete(prefix + path, ...handlers),
-      options: (path: string, ...handlers: (Handler | Middleware)[]) => this.options(prefix + path, ...handlers),
-      head: (path: string, ...handlers: (Handler | Middleware)[]) => this.head(prefix + path, ...handlers),
-      all: (path: string, ...handlers: (Handler | Middleware)[]) => this.all(prefix + path, ...handlers),
-      ws: (path: string, handler: WebSocketHandler) => this.ws(prefix + path, handler),
-      use: (middleware: Middleware) => {
-        this.use(prefix, middleware);
-        return this;
-      }
-    };
+    return new Velo(this._options, this, this.basePath + prefix);
   }
 
   onError(handler: ErrorHandler) {
@@ -89,29 +100,51 @@ export class Velo {
   }
 
   async listen(port: number, hostname: string = "127.0.0.1"): Promise<void> {
-    if (!this.server) {
-      this.server = createServer(this.handleRequest.bind(this));
-      this.server.on("upgrade", (req, socket, head) => {
-        this.handleUpgrade(req, socket, head);
+    const root = this.getRoot();
+    if (!root.server) {
+      root.server = createServer(root.handleRequest.bind(root));
+      root.server.on("connection", (socket) => {
+        root.connections.add(socket);
+        socket.on("close", () => root.connections.delete(socket));
+      });
+      root.server.on("upgrade", (req, socket, head) => {
+        (socket as any)._isWebSocket = true;
+        root.connections.add(socket);
+        socket.on("close", () => root.connections.delete(socket));
+        root.handleUpgrade(req, socket, head);
       });
     }
     return new Promise((resolve) => {
-      this.server!.listen(port, hostname, () => resolve());
+      root.server!.listen(port, hostname, () => resolve());
     });
   }
 
   async close(): Promise<void> {
-    if (!this.server) return;
+    const root = this.getRoot();
+    if (!root.server) return;
+    
+    for (const socket of root.connections) {
+      if ((socket as any)._isWebSocket) {
+        socket.destroy();
+      }
+    }
+    
     return new Promise((resolve, reject) => {
-      this.server!.close((err) => {
+      root.server!.close((err) => {
         if (err) {
           reject(err);
         } else {
-          this.server = undefined;
+          root.server = undefined;
           resolve();
         }
       });
     });
+  }
+
+  protected getRoot(): Velo {
+    let curr: Velo = this;
+    while (curr.parent) curr = curr.parent;
+    return curr;
   }
 
   protected async handleRequest(req: IncomingMessage, res: ServerResponse) {
@@ -134,16 +167,28 @@ export class Velo {
     const matchInfo = this.router.match(ctx.req.method, ctx.req.path);
     const pipeline: Middleware[] = [];
 
-    // Add matching middlewares
-    for (const mw of this.middlewares) {
-      if (ctx.req.path.startsWith(mw.prefix)) {
-        pipeline.push(mw.fn);
-      }
-    }
-
     if (matchInfo.result) {
+      const handlers: any = matchInfo.result.handlers;
+      const scope = handlers.scope as Velo;
+      
+      // Collect middlewares from lineage
+      const lineage: Velo[] = [];
+      let curr: Velo | null = scope;
+      while (curr) {
+        lineage.unshift(curr);
+        curr = curr.parent;
+      }
+      
+      for (const s of lineage) {
+        for (const mw of s.middlewares) {
+          if (ctx.req.path.startsWith(mw.prefix)) {
+            pipeline.push(mw.fn);
+          }
+        }
+      }
+
       ctx.req.params = { ...ctx.req.params, ...matchInfo.result.params };
-      pipeline.push(...matchInfo.result.handlers);
+      pipeline.push(...handlers);
     } else if (matchInfo.methodNotAllowed) {
       pipeline.push(async () => { throw new MethodNotAllowedError(); });
     } else {
@@ -162,8 +207,12 @@ export class Velo {
       return;
     }
 
+    const handlers: any = matchInfo.result.handlers;
+    const scope = handlers.scope as Velo;
+    
     vReq.params = matchInfo.result.params;
-    const handler = matchInfo.result.handlers[0] as WebSocketHandler;
+    const handler = handlers[0] as WebSocketHandler;
+    
     performWebSocketUpgrade(vReq, socket, head, handler);
   }
 
@@ -186,7 +235,8 @@ export class Velo {
   }
 
   async register<T>(plugin: Plugin<T>, options?: T) {
-    await plugin(this, options as T);
+    const scope = this.scope();
+    await plugin(scope, options as T);
   }
 
   decorate(name: string, value: any) {
@@ -194,6 +244,6 @@ export class Velo {
   }
 
   scope() {
-    return this; // Simplified for now
+    return new Velo(this._options, this, this.basePath);
   }
 }

@@ -78,7 +78,10 @@ test("Plugin - 67. Scoped plugin middleware does not run for routes outside the 
   try {
     await fetch(`http://localhost:${port}/outer`);
     // If it leaks, mwCalled will be 1
-    // assert.strictEqual(mwCalled, 0); 
+    assert.strictEqual(mwCalled, 0); 
+    
+    await fetch(`http://localhost:${port}/inner`);
+    assert.strictEqual(mwCalled, 1);
   } finally {
     await app.close();
   }

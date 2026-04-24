@@ -86,7 +86,7 @@ class VeloWebSocketImpl implements VeloWebSocket {
     payload.writeUInt16BE(code, 0);
     payload.write(reason, 2);
     this.sendFrame(0x08, payload);
-    this.socket.end();
+    // RFC 6455: Wait for close frame response (echo) before closing the connection
   }
 
   ping(data = "") {
@@ -173,13 +173,23 @@ class VeloWebSocketImpl implements VeloWebSocket {
       } else {
         this.deliverMessage(opcode, payload, handler);
       }
-    }
- else if (opcode === 0x08) { // Close
-      this._readyState = "closed";
+    } else if (opcode === 0x08) { // Close
       const code = payload.length >= 2 ? payload.readUInt16BE(0) : 1000;
       const reason = payload.length > 2 ? payload.toString("utf8", 2) : "";
-      handler.close(this, code, reason);
-      this.socket.destroy();
+
+      if (this._readyState === "closing") {
+        this._readyState = "closed";
+        handler.close(this, code, reason);
+        this.socket.destroy();
+      } else {
+        this._readyState = "closed";
+        // Echo the close frame
+        const echoPayload = Buffer.alloc(2);
+        echoPayload.writeUInt16BE(code, 0);
+        this.sendFrame(0x08, echoPayload);
+        handler.close(this, code, reason);
+        this.socket.destroy();
+      }
     } else if (opcode === 0x09) { // Ping
       this.sendFrame(0x0a, payload); // Pong
     }

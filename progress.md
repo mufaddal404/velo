@@ -1,19 +1,22 @@
-- Initialized project with TypeScript and ESM.
-- Implemented `VeloError` and subclasses in `src/errors.ts`.
-- Implemented `Request` and `Response` wrappers in `src/request.ts` and `src/response.ts`.
-- Implemented radix tree `Router` in `src/router.ts` (distinguishes between 404 and 405).
-- Implemented middleware pipeline in `src/middleware.ts`.
-- Implemented core `Velo` class in `src/server.ts` with support for routing, middleware, plugins, and WebSockets.
-- Implemented built-in `v` validator in `src/validation.ts`.
-- Implemented `staticFiles` plugin in `src/static.ts` with ETag, Range, and Path Traversal protection.
-- Implemented RFC 6455 WebSocket support in `src/websocket.ts`.
-- Exported public API in `src/index.ts`.
-- Wrote comprehensive tests in `tests/` for all modules (47 tests passing).
-- Passed `npx tsc --noEmit` with zero errors.
-- Created `README.md` with usage examples.
-- Implemented Velo core with support for routing, middleware, plugins, and WebSockets.
-- Implemented a radix tree router with support for static routes, named parameters, and wildcards.
-- Implemented RFC 6455 WebSocket support from scratch using Node's 'http' upgrade event.
-- Implemented a built-in schema validator ('v') and a static file serving plugin.
-- Achieved 75 passing tests covering all spec requirements.
-- Fixed various issues with the test runner and low-level socket handling.
+# Progress - Velo HTTP Server
+
+- [x] Core: Velo class (`src/server.ts`)
+- [x] Routing: Radix tree (`src/router.ts`)
+- [x] Request abstraction (`src/request.ts`)
+- [x] Response abstraction (`src/response.ts`)
+- [x] Middleware pipeline (`src/middleware.ts`)
+- [x] WebSocket support (`src/websocket.ts`)
+- [x] Static file serving (`src/static.ts`)
+- [x] Built-in validation (`src/validation.ts`)
+- [x] Plugin system (`src/plugin.ts`)
+- [x] Error types (`src/errors.ts`)
+- [x] Comprehensive tests (`tests/*.test.ts`)
+- [x] Plugin encapsulation and scoping (`src/server.ts`)
+- [x] RFC 6455 clean close handshake (`src/websocket.ts`)
+
+## Recent Fixes
+- Implemented hierarchical `Velo` instances to support proper plugin encapsulation. Middlewares registered in a scope now only apply to routes within that scope or its children.
+- Updated `VeloWebSocket.close()` to wait for the client's echo Close frame before destroying the socket, adhering to RFC 6455.
+- Added connection tracking to `Velo` to ensure all upgraded WebSocket connections are terminated during `app.close()`.
+- Re-enabled and fixed Test 67 in `tests/plugin.test.ts`.
+- Refactored `tests/websocket.test.ts` to use individual top-level tests for better reliability.

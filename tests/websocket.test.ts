@@ -55,116 +55,165 @@ function sendFrame(socket: net.Socket, opcode: number, payload: string | Buffer,
   socket.write(maskedData);
 }
 
-test("WebSocket Suite", async (t) => {
-    const app = new Velo();
-    let lastReceived: any = null;
-    let lastClosed: any = null;
-    let lastOpened = false;
+test("WebSocket - 34. Valid handshake produces correct Sec-WebSocket-Accept", async () => {
+  const app = new Velo();
+  app.ws("/chat", { open() {}, message() {}, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const key = crypto.randomBytes(16).toString("base64");
+    const expectedAccept = crypto.createHash("sha1").update(key + GUID).digest("base64");
+    const { socket, accept } = await rawConnect(port, "/chat", key);
+    assert.strictEqual(accept, expectedAccept);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
 
-    app.ws("/chat", {
-        open() { lastOpened = true; },
-        message(ws, data) { lastReceived = data; },
-        close(ws, code, reason) { lastClosed = { code, reason }; }
+test("WebSocket - 35. Missing Upgrade header rejected with 400", async () => {
+  const app = new Velo();
+  app.ws("/chat", { open() {}, message() {}, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const res = await new Promise<string>((resolve) => {
+      const socket = net.createConnection(port, "127.0.0.1", () => {
+        socket.write(`GET /chat HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
+      });
+      socket.on("data", (data) => {
+        resolve(data.toString());
+        socket.destroy();
+      });
     });
-    
-    let wsParams: any = null;
-    app.ws("/chat/:room", {
-        open(ws) { wsParams = ws.params; },
-        message() {}, close() {}
+    assert.ok(res.includes("400 Bad Request"));
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - 36. open callback fires after successful handshake", async () => {
+  const app = new Velo();
+  let opened = false;
+  app.ws("/chat", { open() { opened = true; }, message() {}, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    for (let i = 0; i < 50; i++) { if (opened) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.strictEqual(opened, true);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - 37. Text message delivered to message handler", async () => {
+  const app = new Velo();
+  let received: any = null;
+  app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    sendFrame(socket, 1, "hello");
+    for (let i = 0; i < 50; i++) { if (received) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.strictEqual(received, "hello");
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - 38. Binary message delivered to message handler", async () => {
+  const app = new Velo();
+  let received: any = null;
+  app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    const buf = Buffer.from([1, 2, 3]);
+    sendFrame(socket, 2, buf);
+    for (let i = 0; i < 50; i++) { if (received) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.deepStrictEqual(received, buf);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - 39. Ping frame triggers automatic pong response", async () => {
+  const app = new Velo();
+  app.ws("/chat", { open() {}, message() {}, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    const pongPromise = new Promise<Buffer>((resolve) => { 
+      socket.on("data", (data) => {
+        if (data[0] === 0x8a) resolve(data);
+      }); 
     });
+    sendFrame(socket, 9, "ping");
+    const res = await pongPromise;
+    assert.strictEqual(res[0] & 0x0f, 10);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
 
-    await app.listen(0);
-    const port = (app as any).server.address().port;
+test("WebSocket - 40. Fragmented message reassembled before delivery", async () => {
+  const app = new Velo();
+  let received: any = null;
+  app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    sendFrame(socket, 1, "hel", false);
+    sendFrame(socket, 0, "lo", true);
+    for (let i = 0; i < 50; i++) { if (received) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.strictEqual(received, "hello");
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
 
-    try {
-        await t.test("34. Valid handshake produces correct Sec-WebSocket-Accept", async () => {
-            const key = crypto.randomBytes(16).toString("base64");
-            const expectedAccept = crypto.createHash("sha1").update(key + GUID).digest("base64");
-            const { socket, accept } = await rawConnect(port, "/chat", key);
-            assert.strictEqual(accept, expectedAccept);
-            socket.destroy();
-        });
+test("WebSocket - 41. close callback fires with correct code and reason", async () => {
+  const app = new Velo();
+  let closed: any = null;
+  app.ws("/chat", { open() {}, message() {}, close(ws, code, reason) { closed = { code, reason }; } });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat");
+    const payload = Buffer.alloc(5);
+    payload.writeUInt16BE(1001, 0);
+    payload.write("bye", 2);
+    sendFrame(socket, 8, payload);
+    for (let i = 0; i < 50; i++) { if (closed) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.strictEqual(closed?.code, 1001);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
 
-        await t.test("35. Missing Upgrade header rejected with 400", async () => {
-            const res = await new Promise<string>((resolve) => {
-                const socket = net.createConnection(port, "127.0.0.1", () => {
-                    socket.write(`GET /chat HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n`);
-                });
-                socket.on("data", (data) => {
-                    resolve(data.toString());
-                    socket.destroy();
-                });
-            });
-            assert.ok(res.includes("400 Bad Request"));
-        });
-
-        await t.test("36. open callback fires after successful handshake", async () => {
-            lastOpened = false;
-            const { socket } = await rawConnect(port, "/chat");
-            for (let i = 0; i < 50; i++) { if (lastOpened) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.strictEqual(lastOpened, true);
-            socket.destroy();
-        });
-
-        await t.test("37. Text message delivered to message handler", async () => {
-            lastReceived = null;
-            const { socket } = await rawConnect(port, "/chat");
-            sendFrame(socket, 1, "hello");
-            for (let i = 0; i < 50; i++) { if (lastReceived) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.strictEqual(lastReceived, "hello");
-            socket.destroy();
-        });
-
-        await t.test("38. Binary message delivered to message handler", async () => {
-            lastReceived = null;
-            const { socket } = await rawConnect(port, "/chat");
-            const buf = Buffer.from([1, 2, 3]);
-            sendFrame(socket, 2, buf);
-            for (let i = 0; i < 50; i++) { if (lastReceived) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.deepStrictEqual(lastReceived, buf);
-            socket.destroy();
-        });
-
-        await t.test("39. Ping frame triggers automatic pong response", async () => {
-            const { socket } = await rawConnect(port, "/chat");
-            const pongPromise = new Promise<Buffer>((resolve) => { socket.on("data", resolve); });
-            sendFrame(socket, 9, "ping");
-            const res = await pongPromise;
-            assert.strictEqual(res[0] & 0x0f, 10);
-            socket.destroy();
-        });
-
-        await t.test("40. Fragmented message reassembled before delivery", async () => {
-            lastReceived = null;
-            const { socket } = await rawConnect(port, "/chat");
-            sendFrame(socket, 1, "hel", false);
-            sendFrame(socket, 0, "lo", true);
-            for (let i = 0; i < 50; i++) { if (lastReceived) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.strictEqual(lastReceived, "hello");
-            socket.destroy();
-        });
-
-        await t.test("41. close callback fires with correct code and reason", async () => {
-            lastClosed = null;
-            const { socket } = await rawConnect(port, "/chat");
-            const payload = Buffer.alloc(5);
-            payload.writeUInt16BE(1001, 0);
-            payload.write("bye", 2);
-            sendFrame(socket, 8, payload);
-            for (let i = 0; i < 50; i++) { if (lastClosed) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.strictEqual(lastClosed?.code, 1001);
-            socket.destroy();
-        });
-
-        await t.test("42. Route params available in ws.params", async () => {
-            wsParams = null;
-            const { socket } = await rawConnect(port, "/chat/room123");
-            for (let i = 0; i < 50; i++) { if (wsParams) break; await new Promise(r => setTimeout(r, 10)); }
-            assert.deepStrictEqual(wsParams, { room: "room123" });
-            socket.destroy();
-        });
-
-    } finally {
-        await app.close();
-    }
+test("WebSocket - 42. Route params available in ws.params", async () => {
+  const app = new Velo();
+  let wsParams: any = null;
+  app.ws("/chat/:room", { open(ws) { wsParams = ws.params; }, message() {}, close() {} });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const { socket } = await rawConnect(port, "/chat/room123");
+    for (let i = 0; i < 50; i++) { if (wsParams) break; await new Promise(r => setTimeout(r, 10)); }
+    assert.deepStrictEqual(wsParams, { room: "room123" });
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
 });
