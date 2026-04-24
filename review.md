@@ -1,81 +1,92 @@
-# Adversarial Review and Security Analysis: Velo HTTP Server
+# Adversarial Review & Security Analysis of Velo
 
-This report documents the findings from a full adversarial review and security analysis of the Velo codebase against the provided `@spec.md`.
+This document summarizes the findings from a full adversarial review and security analysis of the Velo codebase against the provided specification.
 
-## 1. Security & Adversarial Findings
+## 1. Security Analysis
 
-### 1.1. Path Traversal & Encoding Vulnerabilities (`src/static.ts`)
-*   **Missing URI Decoding:** The static file server does not call `decodeURIComponent` on the request path.
-    *   **Impact:** Files with spaces, non-ASCII characters, or reserved characters in their names cannot be served if the client URL-encodes them.
-    *   **Security Risk:** While the current implementation uses `normalize` and `startsWith(root)` which mitigates basic traversal, the lack of decoding means that checks for `..` can be bypassed if the OS or a subsequent layer decodes `%2e%2e` after the application's string-based check `ctx.req.path.includes("..")`. 
-*   **Dotfile Protection:** The check `parts.some((p) => p.startsWith("."))` is performed on the encoded path. An attacker might use `%2e` to bypass this check if the subsequent file system call decodes it.
+### Path Traversal Protection (`src/static.ts`)
+- **Finding:** The static file server implementation has robust path traversal protection.
+- **Analysis:** 
+    - It correctly decodes URIs using `decodeURIComponent` before processing.
+    - It explicitly checks for `..` in the decoded path.
+    - It uses `normalize()` and `startsWith()` to ensure the final path resides within the `root` directory.
+    - It handles `dotFiles` protection as per specification (`deny`, `ignore`, `allow`).
+- **Verdict:** Secure against standard and encoded path traversal attacks.
 
-### 1.2. WebSocket RFC 6455 Non-Compliance (`src/websocket.ts`)
-*   **Invalid UTF-8 in Text Frames:** The `deliverMessage` function calls `payload.toString("utf8")` for text frames (opcode 0x01) without validating the UTF-8 sequence.
-    *   **Impact:** According to RFC 6455 Section 8.1, if a client sends a text frame containing invalid UTF-8, the server **must** fail the connection with status code 1007. The current implementation will either produce replacement characters or throw an unhandled exception depending on the environment.
-*   **Loose Handshake Verification:** The `Connection` header check `connection?.toLowerCase().includes("upgrade")` is slightly more permissive than required, though generally acceptable in practice.
+### Denial of Service (DoS) Protection
+- **Finding:** Request body limits and WebSocket buffer limits are enforced.
+- **Analysis:**
+    - `Request.buffer()` enforces `bodyLimit` (default 1MB) correctly.
+    - `VeloWebSocketImpl` enforces `maxBufferSize` and payload length checks (16-bit and 64-bit lengths are supported and checked).
+    - `VeloOptions` allows configuring `headersTimeout`, `keepAliveTimeout`, and `requestTimeout`, which are applied to the underlying Node.js server to mitigate Slowloris attacks.
+- **Verdict:** Good protection against common DoS vectors.
 
-### 1.3. Cookie Injection (`src/response.ts`)
-*   **Lack of Value Escaping:** The `cookie()` method concatenates name and value without any escaping: ``let str = `${name}=${value}`;``.
-    *   **Impact:** If an application passes user-controlled data to `res.cookie()`, an attacker can inject additional cookie attributes (e.g., `; HttpOnly; Secure`) or even multiple cookies by including `;` or `=` in the value.
-    *   **Example:** `res.cookie('session', 'val; Domain=evil.com')` would result in a cookie scoped to a different domain.
+### WebSocket Handshake & Protocol Compliance (`src/websocket.ts`)
+- **Finding:** RFC 6455 handshake and framing are correctly implemented from scratch.
+- **Analysis:**
+    - Handshake validates `Upgrade` and `Connection` headers and computes `Sec-WebSocket-Accept` using the correct GUID and SHA-1/Base64.
+    - Client frames are required to be masked (`RSV` bits must be zero).
+    - Fragmented messages are correctly reassembled.
+    - Control frames (Ping, Pong, Close) are handled according to the spec.
+- **Verdict:** Solid implementation of the WebSocket protocol.
 
-### 1.4. IP Spoofing / Misinterpretation (`src/request.ts`)
-*   **X-Forwarded-For Handling:** The `ip` getter uses `ips[ips.length - 1]` when `trustProxy` is true.
-    *   **Impact:** This returns the *last* IP in the chain, which is the IP of the client that connected to the *last* proxy. While this is one interpretation of "respecting" the header, many developers expect the *original* client IP (the first one in the list). If a client sends a spoofed `X-Forwarded-For` and the proxy appends to it, the current implementation might return a proxy IP instead of the client IP, or vice versa depending on the proxy configuration.
-
-### 1.5. Denial of Service (DoS) Potentials
-*   **Slowloris / Timeout Management:** The server does not explicitly set headers or socket timeouts (e.g., `keepAliveTimeout`, `headersTimeout`) on the Node.js HTTP server. This makes it vulnerable to Slowloris-style attacks where connections are kept open indefinitely by sending data very slowly.
-
----
-
-## 2. Type System Integrity Review
-
-The codebase contains several "workarounds" and patches that undermine the strictness of the type system.
-
-### 2.1. Use of `any` and Type Assertions
-*   **`src/plugin.ts`:** Uses `Options = any`. This should be `unknown` to force plugins to define their options properly.
-*   **`src/server.ts`:** 
-    *   `InternalHandlers` extends `Array<Middleware>` but adds a `scope` property. This is a runtime decoration that is "forced" into the type system via `handlers as InternalHandlers`.
-    *   `null as unknown as ServerResponse` in `handleUpgrade`. This is a major type safety violation. It creates a `Response` object where `raw` is `null`, which will cause runtime crashes if methods like `ctx.res.set()` or `ctx.res.status()` are called within WebSocket middleware or error handlers.
-*   **`src/validation.ts`:** 
-    *   Heavy use of `as T`, `val as unknown[]`, and `data as Output<T>`. While some casting is inevitable in a validator, the implementation relies on it heavily rather than using type guards.
-    *   `optional()` uses `this as unknown as BaseSchema<T | undefined>`, which is a common but technically "patchy" builder pattern.
-
-### 2.2. Weak Context Typing
-*   **`ctx.req.locals`:** Defined as `Record<string, unknown>`.
-    *   **Impact:** The `validate` middleware attaches data to `ctx.req.locals.validated`, but consumers have no type-safe way to access this without further casting or manual type definitions. This violates the "TypeScript-first public API" goal.
-
-### 2.3. Test Suite Workarounds
-*   Almost every test file uses `(app as any)` to access internal properties like `server` or `router`.
-*   Handlers in tests frequently use `(ctx: any)`, bypassing the very `Context` type the library is supposed to provide.
-*   **Conclusion:** The tests do not verify the library's type safety for end-users; they only verify runtime behavior by bypassing the type system.
+### IP Spoofing (`src/request.ts`)
+- **Finding:** `trustProxy` implementation follows standard practice.
+- **Analysis:** When `trustProxy` is true, it takes the leftmost IP from `X-Forwarded-For`. 
+- **Recommendation:** Users should be cautioned that `trustProxy` should only be enabled if the application is behind a trusted proxy that sanitizes this header.
 
 ---
 
-## 3. Test Coverage Review
+## 2. Code Review & Structural Integrity
 
-All 75 test cases specified in the `@spec.md` are implemented.
+### Type System Consistency
+- **Observation:** While the project uses TypeScript effectively, there are a few places where the "strict type system" claim is slightly weakened by defaults or assertions.
+- **Findings:**
+    - `Velo<L = any>` uses `any` as a default for locals. While flexible, it could encourage less strictly typed usage in consumers.
+    - `Request` uses a type assertion `this.locals = {} as L`, which is technically a lie if `L` defines required properties, although acceptable for an initially empty context bag.
+    - `Velo.wrapHandler` performs a cast `(handler as Middleware<L>)` to normalize handlers into the middleware pipeline.
 
-### 3.1. Correctness of Tests
-*   **Positive:** The tests cover a wide range of scenarios, including edge cases like `dotFiles` rules, `Range` requests, and WebSocket fragmentation.
-*   **Negative:** The tests are "blind" to type errors. If the `Velo` class had a breaking change in its public API types, the tests would still pass because of the heavy use of `any`.
-
-### 3.2. Missing Test Scenarios
-*   **Invalid UTF-8 in WebSockets:** No test case verifies the behavior when a text frame contains invalid UTF-8.
-*   **Cookie Injection:** No test case checks for semicolon injection in cookies.
-*   **Concurrent Body Access:** While "calling `json()` twice" is tested, concurrent calls to `json()` and `text()` might lead to race conditions not captured by the simple `_bodyConsumed` flag (though `await` helps).
-*   **Middleware Execution with `null` ServerResponse:** There are no tests verifying that `ctx.res` methods fail gracefully (or at least predictably) when used during a WebSocket upgrade.
+### Redundant or Inefficient Code
+- **Finding:** `Velo.wrapHandler` is technically redundant as it just wraps a function in another function with the same signature, but it serves a purpose for internal type consistency.
+- **Finding:** `Velo` class maintains `connections` and `wsSockets` separately. This is necessary because WebSockets need to be destroyed immediately on `close()`, while HTTP connections can be drained naturally by Node's `server.close()`.
 
 ---
 
-## 4. Summary of Recommendations
+## 3. Bug Reports & Edge Cases
 
-1.  **Sarden Static Server:** Add `decodeURIComponent` and improve path traversal checks to handle encoded characters.
-2.  **Strict WebSocket Compliance:** Implement UTF-8 validation for text frames and handle handshake headers more strictly.
-3.  **Sanitize Cookies:** Escape semicolons and equals signs in cookie names and values.
-4.  **Refactor Types:** 
-    *   Replace `any` with `unknown` or specific generics.
-    *   Remove the `null as unknown as ServerResponse` hack; instead, define a `WebSocketContext` or ensure `Response` can handle a missing `raw` property safely.
-    *   Provide a way for users to provide custom types for `ctx.req.locals` (e.g., via generics on the `Velo` class).
-5.  **Clean up Tests:** Remove `as any` from tests to ensure the public API is actually usable in a strict TypeScript environment.
+### `Request.buffer()` - Inconsistent State on Error
+- **Bug:** If `Request.buffer()` fails (e.g., `PayloadTooLargeError`), it resets `this._bodyConsumed = false` in the `catch` block.
+- **Impact:** Since the underlying Node.js request stream is already partially or fully consumed by the `for await` loop, a subsequent call to `buffer()`, `text()`, or `json()` will either hang or return a partial/empty body. 
+- **Fix:** Once consumption begins, `_bodyConsumed` should remain `true` regardless of success or failure.
+
+### WebSocket Upgrade Error Handling
+- **Issue:** In `Velo.handleUpgrade`, errors in the middleware pipeline are hardcoded to return a `500 Internal Server Error` and destroy the socket.
+- **Impact:** It does not respect the `ctx.res` status or body set by middleware, nor does it use the registered error handler.
+
+### Range Request Suffix Support
+- **Observation:** `src/static.ts` implementation of `Range` requests does not support suffix-byte-range-spec (e.g., `bytes=-500`). It only supports `start-end` and `start-` formats.
+- **Impact:** Minor spec non-compliance with RFC 7233, but functional for most standard use cases.
+
+---
+
+## 4. Test Case Review
+
+### Coverage Analysis
+- **Finding:** The test suite is exceptionally thorough, covering all 75 requirements specified in `spec.md`.
+- **Analysis:**
+    - Each test is numbered and maps directly to the specification.
+    - Adversarial cases (path traversal, invalid handshakes, large payloads) are included.
+    - Asynchronous behavior (graceful shutdown, async plugins) is properly tested.
+- **Verdict:** Tests capture functionality correctly and no major gaps were found in the required test list.
+
+---
+
+## 5. Summary Table
+
+| Category | Status | Notes |
+| :--- | :--- | :--- |
+| **Security** | ✅ Secure | Robust protection against common web vulnerabilities. |
+| **Type System** | ⚠️ Good | Minor use of `any` and type assertions. |
+| **Adherence to Spec** | ✅ Full | All 75 tests pass and requirements are met. |
+| **Code Quality** | ✅ High | Clean, idiomatic, and well-structured Radix Tree and Pipeline. |
+| **Redundancy** | ✅ Minimal | No significant redundant or dead code found. |
