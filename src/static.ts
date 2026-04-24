@@ -40,7 +40,8 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
   const maxAge = options.maxAge || 0;
   const useEtag = options.etag !== false;
 
-  app.get(prefix + "*", async (ctx: Context) => {
+  const routePrefix = prefix.endsWith("/") ? prefix : prefix + "/";
+  app.get(routePrefix + "*", async (ctx: Context) => {
     if (ctx.req.path.includes("..")) {
       throw new ForbiddenError("Path traversal detected");
     }

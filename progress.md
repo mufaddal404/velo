@@ -11,3 +11,9 @@
 - Wrote comprehensive tests in `tests/` for all modules (47 tests passing).
 - Passed `npx tsc --noEmit` with zero errors.
 - Created `README.md` with usage examples.
+- Implemented Velo core with support for routing, middleware, plugins, and WebSockets.
+- Implemented a radix tree router with support for static routes, named parameters, and wildcards.
+- Implemented RFC 6455 WebSocket support from scratch using Node's 'http' upgrade event.
+- Implemented a built-in schema validator ('v') and a static file serving plugin.
+- Achieved 75 passing tests covering all spec requirements.
+- Fixed various issues with the test runner and low-level socket handling.

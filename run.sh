@@ -4,240 +4,350 @@ set -e
 MAX_ITER=5
 ITER=0
 
-# ── Initialize git if not already a repo ─────────────────────────
+# ── Colors ────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+log()  { echo -e "${BLUE}${BOLD}[velo]${NC} $1"; }
+ok()   { echo -e "${GREEN}✅ $1${NC}"; }
+warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
+fail() { echo -e "${RED}❌ $1${NC}"; }
+
+# ── Init git ──────────────────────────────────────────────────────
 if [ ! -d .git ]; then
   git init
   git add .
-  git commit -m "chore: initial state before agent loop"
+  git commit -m "chore: initial scaffold before agent loop"
+  log "Git repo initialized"
 fi
 
-BEST_COMMIT=$(git rev-parse HEAD)
-BEST_CRITICAL_COUNT=999
+# ── Resume detection ──────────────────────────────────────────────
+if [ -f iteration.txt ]; then
+  LAST_ITER=$(cat iteration.txt)
+else
+  LAST_ITER=0
+fi
 
+if [ "$LAST_ITER" -gt 0 ]; then
+  echo ""
+  echo -e "${BOLD}Previous run detected — last completed iteration: $LAST_ITER${NC}"
+  echo ""
+  echo "  [r] Resume from iteration $((LAST_ITER + 1))"
+  echo "  [s] Start fresh from iteration 1"
+  echo ""
+  read -rp "Choice (r/s): " RESUME_CHOICE
+
+  if [ "$RESUME_CHOICE" = "r" ]; then
+    ITER=$LAST_ITER
+    log "Resuming from iteration $((ITER + 1))..."
+
+    # Restore best known state from git tags if available
+    if git tag | grep -q "velo-best-iter-"; then
+      BEST_COMMIT=$(git tag | grep "velo-best-iter-" | sort -t- -k4 -n | tail -1 | xargs git rev-parse)
+      BEST_CRITICAL_COUNT=$(git tag | grep "velo-best-iter-" | sort -t- -k4 -n | tail -1 | sed 's/.*critical-//')
+      log "Restored best known state: $BEST_COMMIT ($BEST_CRITICAL_COUNT critical issues)"
+    else
+      BEST_COMMIT=$(git rev-parse HEAD)
+      BEST_CRITICAL_COUNT=999
+    fi
+
+  else
+    log "Starting fresh..."
+    ITER=0
+    echo "0" > iteration.txt
+    > progress.md
+    rm -f review.md
+    BEST_COMMIT=$(git rev-parse HEAD)
+    BEST_CRITICAL_COUNT=999
+  fi
+else
+  ITER=0
+  BEST_COMMIT=$(git rev-parse HEAD)
+  BEST_CRITICAL_COUNT=999
+fi
+
+# ── Helpers ───────────────────────────────────────────────────────
 count_critical_issues() {
-  sed -n '/^CRITICAL_ISSUES/,/^MAJOR_ISSUES/p' review.md 2>/dev/null \
-    | grep -c '^\s*-\s*\[' || echo 0
+  local count
+  count=$(sed -n '/^CRITICAL_ISSUES:/,/^MAJOR_ISSUES:/p' review.md 2>/dev/null \
+    | grep -c '^\s*-\s*\[' || true)
+  echo "${count:-0}"
 }
 
+review_status() {
+  grep '^STATUS:' review.md 2>/dev/null | tail -1 | awk '{print $2}' || echo "UNKNOWN"
+}
+
+# ── Main loop ─────────────────────────────────────────────────────
 while true; do
   ITER=$((ITER + 1))
   echo "$ITER" > iteration.txt
-  echo "=== Iteration $ITER ==="
 
-  # ── CODING AGENT ─────────────────────────────────────────────────
-  gemini -p "
-## Spec
+  echo ""
+  echo -e "${BOLD}════════════════════════════════════════${NC}"
+  echo -e "${BOLD}  Iteration $ITER / $MAX_ITER${NC}"
+  echo -e "${BOLD}════════════════════════════════════════${NC}"
+
+  # ── CODING AGENT ───────────────────────────────────────────────
+  log "Running coding agent..."
+  gemini --yolo -p "
+You are an expert TypeScript engineer implementing a production-grade Node.js HTTP
+server library called Velo.
+
+## Spec (source of truth)
 $(cat spec.md)
 
 ## Progress so far
-$(cat progress.md 2>/dev/null || echo 'First iteration.')
+$(cat progress.md 2>/dev/null || echo 'First iteration — nothing done yet.')
 
-## Git log — what has been tried
-$(git log --oneline 2>/dev/null | head -20)
+## Git history — what has been attempted across all iterations
+$(git log --oneline 2>/dev/null | head -30 || echo 'No commits yet.')
 
-## Required fixes from last review
-$(grep -A 50 'WHAT_WOULD_MAKE_THIS_PASS:' review.md 2>/dev/null || echo 'No prior review.')
+## What the reviewer requires you to fix (address ALL of these)
+$(grep -A 200 'WHAT_WOULD_MAKE_THIS_PASS:' review.md 2>/dev/null || echo 'No prior review — implement the full spec from scratch.')
 
-## Critical issues to fix
-$(sed -n '/^CRITICAL_ISSUES/,/^MAJOR_ISSUES/p' review.md 2>/dev/null || echo 'None yet.')
+## Critical issues from last review (hard blockers — fix every single one)
+$(sed -n '/^CRITICAL_ISSUES:/,/^MAJOR_ISSUES:/p' review.md 2>/dev/null || echo 'None yet.')
 
-Write/update code in src/, then append what you did to progress.md.
+## Major issues from last review (fix these too)
+$(sed -n '/^MAJOR_ISSUES:/,/^MINOR_ISSUES:/p' review.md 2>/dev/null || echo 'None yet.')
+
+## Rules — non-negotiable
+- Write all source files into src/ and all tests into tests/
+- Zero external npm dependencies in src/ — only node built-ins
+- npx tsc --noEmit must pass with zero errors when you are done
+- Tests use only node:test and node:assert — no Jest, no Vitest, no ws package
+- After writing all files, append a concise bullet-point summary to progress.md
+- Do NOT regress passing behaviour while fixing issues
+- If prior iterations were reverted, do NOT repeat the same approach — try differently
+- The radix tree router must be an actual trie, not array.find() or array.filter()
+- WebSocket handshake must compute Sec-WebSocket-Accept as:
+  base64(SHA1(clientKey + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'))
+- All 75 tests listed in the spec must exist with meaningful assertions
 "
 
-  # ── Commit after coding agent ─────────────────────────────────────
+  # ── Commit after coding agent ──────────────────────────────────
   git add -A
-  git commit -m "agent(coding): iteration $ITER — $(tail -1 progress.md)"
-
+  git commit -m "agent(coding): iteration $ITER — $(tail -1 progress.md 2>/dev/null | head -c 60 || echo 'work in progress')" || true
   CODING_COMMIT=$(git rev-parse HEAD)
+  ok "Coding agent done — committed $CODING_COMMIT"
 
-  # ── REVIEW AGENT ─────────────────────────────────────────────────
-  gemini -p "
-You are ARIA — Adversarial Review and Inspection Agent. You are a principal-level QA engineer with 15+ years of experience breaking software. Your job is NOT to be helpful to the coding agent. Your job is to find every flaw, gap, assumption, and landmine in the code before it ships. You are paid to be harsh.
+  # ── REVIEW AGENT (ARIA) ────────────────────────────────────────
+  log "Running review agent (ARIA)..."
+  gemini --yolo -p "
+You are ARIA — Adversarial Review and Inspection Agent. Principal-level QA engineer,
+15+ years breaking production software. Your job is NOT to be helpful to the coding
+agent. Your single job is to find every flaw before this ships.
 
-## YOUR MINDSET
-- Assume the code is broken until you prove otherwise
-- Every untested code path is a bug waiting to happen
-- \"It probably works\" is not acceptable — prove it works or flag it
-- Good intentions do not ship; correct code ships
-- You have seen every class of bug. You will find them here too
+Assume the code is broken until you prove otherwise.
+Good intentions do not ship. Correct, tested, secure code ships.
 
----
-
-## WHAT YOU HAVE
-
-### Original spec (source of truth)
+## Original spec (source of truth — every requirement must be MET)
 $(cat spec.md)
 
-### Code under review
-$(find src -type f | sort | xargs -I{} sh -c 'echo \"=== FILE: {} ===\"; cat \"{}\"; echo')
+## Source code under review
+$(find src -type f 2>/dev/null | sort | xargs -I{} sh -c 'echo "=== FILE: {} ==="; cat "{}"; echo' || echo 'No source files found.')
 
-### Test files (if any)
-$(find tests -type f 2>/dev/null | sort | xargs -I{} sh -c 'echo \"=== TEST: {} ===\"; cat \"{}\"; echo' || echo 'No tests found.')
+## Test files under review
+$(find tests -type f 2>/dev/null | sort | xargs -I{} sh -c 'echo "=== TEST: {} ==="; cat "{}"; echo' || echo 'No test files found.')
 
-### What the coding agent claims it did
-$(cat progress.md)
+## Coding agent claims
+$(cat progress.md 2>/dev/null || echo 'No progress log.')
 
-### Previous review rounds
-$(cat review.md 2>/dev/null || echo 'This is round 1.')
+## Previous review rounds (for context — do not soften stance based on prior rounds)
+$(cat review.md 2>/dev/null || echo 'Round 1 — no prior review.')
+
+## Current iteration number
+$(cat iteration.txt)
 
 ---
 
-## YOUR REVIEW CHECKLIST — go through EVERY section
+## YOUR CHECKLIST — go through EVERY section, no skipping
 
 ### 1. SPEC COMPLIANCE
-- List every requirement from spec.md
-- For each one: is it implemented? Fully? Or partially?
-- Flag any requirement that is missing, misunderstood, or only half-done
-- The coding agent's claim that something is done means nothing — verify in the code
+Go through every numbered requirement in the spec. For each one state:
+MET | PARTIAL | MISSING — one-line note with file:line if applicable.
 
 ### 2. CORRECTNESS
-- Trace the happy path manually. Does it actually produce the right output?
-- Find at least 3 edge cases the code does NOT handle:
-  - Empty inputs, null/undefined/None values
-  - Boundary values (0, -1, max int, empty string, whitespace-only)
-  - Concurrent access or repeated calls
-  - Large inputs or inputs at scale
-- Find logic errors: off-by-one, wrong operator, inverted condition, wrong variable used
+- Router: is it actually a radix trie or array.find()? Show the relevant code.
+- WebSocket: trace the Sec-WebSocket-Accept computation step by step. Is it correct?
+- Static files: trace a Range: bytes=100-199 request. Are the offsets correct?
+- getBalanceOn equivalent: does getBalanceOn-style history work for any date?
+- Find at least 3 unhandled edge cases with specific inputs that would break it
+- Find logic errors: off-by-one, inverted conditions, wrong variable names
 
 ### 3. ERROR HANDLING
-- What happens when a dependency (DB, API, file system) is unavailable?
-- Are errors caught at the right level, or swallowed silently?
-- Are error messages actionable? Or are they \"something went wrong\"?
-- Does the code leak internal details (stack traces, file paths, secrets) in errors?
-- Does it fail loudly (crash) when it should fail loudly, and gracefully when it should recover?
+- Malformed JSON body — does it crash the server or return 400?
+- VeloError thrown in handler — does it reach onError or become a 500?
+- Async handler throws — unhandled rejection or caught?
+- Missing toAccountId on transfer — is the error thrown before or after mutation?
 
 ### 4. SECURITY
-- Injection vectors: SQL injection, command injection, path traversal
-- Authentication: is every protected endpoint actually protected?
-- Authorization: can a user access or modify another user's data?
-- Input validation: is ALL external input validated before use?
-- Secrets: are credentials, tokens, or keys hardcoded or logged?
-- Dependency risk: any known-vulnerable packages imported?
+- Path traversal: what does the code do with the path /../../../../etc/passwd?
+- Dotfiles: what exactly happens for /.env with dotFiles='deny'?
+- WebSocket: what happens if Upgrade header is present but key is missing?
+- Body size: is the limit enforced before the full body is buffered in memory?
 
-### 5. TESTS
-- Do tests exist? If not, this is an automatic FAIL
-- Do tests cover the happy path? Edge cases? Failure modes?
-- Are there tests that test the mock instead of the real behaviour?
-- Are assertions meaningful? (assert True, assert len > 0 are not meaningful)
-- Would these tests catch a regression if someone changed a critical function?
-- What is the effective code coverage? Estimate it honestly
+### 5. TESTS — verify against all 75 numbered tests in the spec
+For each of the 75 tests:
+- PRESENT — has a meaningful assertion (not just assert(result !== null))
+- WEAK — present but assertion does not actually verify the behaviour
+- MISSING — not present at all
+List every WEAK and MISSING test by number and name.
 
-### 6. CODE QUALITY
-- Is the code readable to someone who didn't write it?
-- Are there functions longer than 40 lines that should be split?
-- Is there duplication that will cause bugs when one copy is updated but not the other?
-- Are variable and function names honest about what they do?
-- Is there dead code, commented-out code, or TODO/FIXME left in?
-- Are there magic numbers or strings that should be named constants?
+### 6. TYPESCRIPT
+- Run npx tsc --noEmit mentally — list any type errors you can spot
+- Any 'any' used as an escape hatch?
+- Are the exported types in index.ts sufficient for a consumer?
+- Is module augmentation for decorate() documented and typed?
 
-### 7. ROBUSTNESS AND OPERATIONAL READINESS
-- Will this code behave correctly after running for 24 hours straight?
-- Are there memory leaks, connection leaks, or resource leaks?
-- Are retries implemented where a transient failure is likely?
-- Is logging present at critical decision points (not just errors)?
-- If this crashed in production at 3am, would the on-call engineer know what happened?
+### 7. CODE QUALITY
+- Any function over 50 lines?
+- Dead code, commented blocks, TODOs left in?
+- Magic strings (especially the WebSocket GUID) — are they named constants?
+- Is the radix tree node structure sensible for the matching priority rules?
 
-### 8. SPEC DRIFT
-- Has the coding agent made assumptions not in the spec?
-- Has the coding agent introduced behaviour the spec explicitly did NOT ask for?
-- Are there architectural decisions that will make future spec changes hard?
+### 8. OPERATIONAL
+- app.close() — does it actually wait for in-flight requests to finish?
+- stream() — is pipe() used with backpressure handling?
+- Unhandled promise rejection in a handler — does the whole server crash?
+- Memory: are client state entries ever cleaned up?
 
 ---
 
-## OUTPUT FORMAT
+## YOUR OUTPUT
 
-Write your full review to review.md in exactly this structure:
+Write the complete review to the file review.md — overwrite it entirely.
+Use EXACTLY this format with EXACTLY these section headers:
 
-\`\`\`
-ROUND: <iteration number from iteration.txt>
+ROUND: $(cat iteration.txt)
 STATUS: PASS | FAIL
-CONFIDENCE: HIGH | MEDIUM | LOW  (how confident are you in the status)
+CONFIDENCE: HIGH | MEDIUM | LOW
 
 SPEC_COMPLIANCE:
-  <requirement 1>: MET | PARTIAL | MISSING — <one line note>
-  <requirement 2>: MET | PARTIAL | MISSING — <one line note>
-  ...
+  <requirement text>: MET | PARTIAL | MISSING — <note>
 
-CRITICAL_ISSUES:  (blockers — must fix before PASS)
-  - [CORRECTNESS] <file>:<line> — <description of bug and why it matters>
-  - [SECURITY]    <file>:<line> — <description>
-  - [TESTS]       <description of missing/broken test coverage>
-  ...
+CRITICAL_ISSUES:
+  - [CATEGORY] file:line — description and why it matters
+  (write exactly: None — if there are truly none)
 
-MAJOR_ISSUES:  (serious — should fix)
-  - [ERROR_HANDLING] <description>
-  - [QUALITY]        <description>
-  ...
+MAJOR_ISSUES:
+  - [CATEGORY] description
+  (write exactly: None — if there are truly none)
 
-MINOR_ISSUES:  (nice to fix)
-  - <description>
-  ...
+MINOR_ISSUES:
+  - description
+  (write exactly: None — if there are truly none)
+
+TEST_COVERAGE:
+  PRESENT: <count>
+  WEAK: <count> — <list by number>
+  MISSING: <count> — <list by number>
 
 WHAT_WOULD_MAKE_THIS_PASS:
-  <numbered list of exactly what the coding agent must do to get a PASS on the next round>
-  1. ...
+  1. <specific, actionable, file-level instruction>
   2. ...
 
 SUMMARY:
-  <3-5 sentences. Be direct. What is the overall state of this code?>
-\`\`\`
+  <3-5 direct sentences. State the actual condition of the code. No encouragement.>
+
+---
 
 ## GRADING RULES
-- STATUS: PASS only if ALL of the following are true:
-  1. Every spec requirement is MET (no PARTIAL, no MISSING)
-  2. CRITICAL_ISSUES list is empty
-  3. Tests exist and cover core behaviour
-  4. No security issues of any severity
-- STATUS: FAIL if ANY of the above is not met
-- Do NOT soften your language. Do NOT encourage the coding agent. Your only job is accuracy.
+
+STATUS: PASS only when ALL four conditions are simultaneously true:
+  1. Every spec requirement is MET — zero PARTIAL, zero MISSING
+  2. CRITICAL_ISSUES is empty (None)
+  3. All 75 tests are PRESENT with meaningful assertions — zero WEAK, zero MISSING
+  4. Zero TypeScript errors, zero security issues of any severity
+
+STATUS: FAIL if ANY of the above is not met.
+CONFIDENCE: LOW if you could not fully verify a section due to missing code.
+
+Write the file now.
 "
 
-  git add review.md
-  git commit -m "agent(review): iteration $ITER — status: $(grep '^STATUS:' review.md | awk '{print $2}')"
+  # ── Commit review ──────────────────────────────────────────────
+  STATUS=$(review_status)
+  git add review.md progress.md
+  git commit -m "agent(review): iteration $ITER — $STATUS" || true
+  ok "Review done — STATUS: $STATUS"
 
-  # ── Regression check ─────────────────────────────────────────────
-  STATUS=$(grep '^STATUS:' review.md | tail -1 | awk '{print $2}')
+  # ── Regression check ───────────────────────────────────────────
   CURRENT_CRITICAL=$(count_critical_issues)
+  log "Critical issues: $CURRENT_CRITICAL (best so far: $BEST_CRITICAL_COUNT)"
 
   if [ "$CURRENT_CRITICAL" -gt "$BEST_CRITICAL_COUNT" ]; then
-    echo "⚠️  Regression detected ($BEST_CRITICAL_COUNT → $CURRENT_CRITICAL critical issues)"
-    echo "   Reverting src/ to $BEST_COMMIT"
+    fail "REGRESSION — $BEST_CRITICAL_COUNT → $CURRENT_CRITICAL critical issues"
+    warn "Reverting src/ and tests/ to: $BEST_COMMIT"
 
-    # Restore only src/ from the best commit, keep review.md and progress.md
-    git checkout "$BEST_COMMIT" -- src/
-
-    git add src/
-    git commit -m "agent(revert): iteration $ITER regressed, restored $(git log --oneline $BEST_COMMIT -1)"
+    git checkout "$BEST_COMMIT" -- src/ tests/ 2>/dev/null || true
 
     cat >> progress.md << EOF
 
 --- REVERT (iteration $ITER) ---
-Reverted to commit $BEST_COMMIT — regression from $BEST_CRITICAL_COUNT to $CURRENT_CRITICAL critical issues.
-Do NOT repeat iteration $ITER's approach. Try something different.
+Iteration $ITER was reverted: regression from $BEST_CRITICAL_COUNT to $CURRENT_CRITICAL critical issues.
+Restored to commit: $BEST_COMMIT
+DO NOT repeat iteration $ITER approach. Read WHAT_WOULD_MAKE_THIS_PASS and try a different strategy.
 ---
 EOF
-    git add progress.md
-    git commit -m "agent(meta): log revert reason for iteration $ITER"
+    git add -A
+    git commit -m "agent(revert): iteration $ITER regressed ($BEST_CRITICAL_COUNT→$CURRENT_CRITICAL), restored $BEST_COMMIT" || true
 
   else
     BEST_COMMIT=$CODING_COMMIT
     BEST_CRITICAL_COUNT=$CURRENT_CRITICAL
-    echo "✅ New best: $BEST_COMMIT ($CURRENT_CRITICAL critical issues)"
+    # Tag the best known good state for resume capability
+    git tag -f "velo-best-iter-$ITER-critical-$CURRENT_CRITICAL" 2>/dev/null || true
+    ok "New best: $BEST_COMMIT ($CURRENT_CRITICAL critical issues)"
   fi
 
-  # ── Exit conditions ───────────────────────────────────────────────
+  # ── Exit conditions ────────────────────────────────────────────
   if [ "$STATUS" = "PASS" ]; then
-    echo "✅ Passed on iteration $ITER"
-    git tag "agent-pass-iter-$ITER"
+    echo ""
+    ok "PASSED on iteration $ITER"
+    git tag -f "velo-pass-iter-$ITER" 2>/dev/null || true
     break
   fi
 
   if [ "$ITER" -ge "$MAX_ITER" ]; then
-    echo "⚠️  Max iterations reached — checking out best commit"
-    git checkout "$BEST_COMMIT" -- src/
-    git add src/
-    git commit -m "agent(final): restored best result from $BEST_COMMIT"
-    git tag "agent-best-result"
+    echo ""
+    warn "Max iterations ($MAX_ITER) reached"
+    warn "Restoring best result: $BEST_COMMIT ($BEST_CRITICAL_COUNT critical issues)"
+    git checkout "$BEST_COMMIT" -- src/ tests/ 2>/dev/null || true
+    git add -A
+    git commit -m "agent(final): restored best result — $BEST_CRITICAL_COUNT critical issues remaining" || true
+    git tag -f "velo-best-result" 2>/dev/null || true
+    echo ""
+    log "See review.md for remaining issues before publishing"
     break
   fi
+
+  echo ""
+  log "Looping — iteration $ITER/$MAX_ITER complete"
 done
+
+# ── Final summary ──────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}════════════════════════════════════════${NC}"
+echo -e "${BOLD}  Final state${NC}"
+echo -e "${BOLD}════════════════════════════════════════${NC}"
+echo ""
+echo -e "  Status:         ${BOLD}$STATUS${NC}"
+echo -e "  Iterations:     $ITER / $MAX_ITER"
+echo -e "  Critical left:  $BEST_CRITICAL_COUNT"
+echo -e "  Best commit:    $BEST_COMMIT"
+echo ""
+echo -e "  ${BOLD}Git log:${NC}"
+git log --oneline | head -20
+echo ""
+echo -e "  ${BOLD}Next steps:${NC}"
+echo "  cat review.md           # full review"
+echo "  npx tsc --noEmit        # type check"
+echo "  node --test tests/      # run tests"
+echo "  npm run build           # build for publishing"
+echo ""

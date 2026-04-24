@@ -5,7 +5,7 @@ import { Router } from "./router.js";
 import { type Middleware, type Handler, type ErrorHandler, compose, type Context } from "./middleware.js";
 import { InternalServerError, NotFoundError, VeloError, MethodNotAllowedError, UnprocessableEntityError } from "./errors.js";
 import { type Plugin } from "./plugin.js";
-import { type WebSocketHandler, handleUpgrade } from "./websocket.js";
+import { type WebSocketHandler, handleUpgrade as performWebSocketUpgrade } from "./websocket.js";
 
 export interface VeloOptions {
   trustProxy?: boolean;
@@ -88,10 +88,12 @@ export class Velo {
     this._notFoundHandler = handler;
   }
 
-  async listen(port: number, hostname?: string): Promise<void> {
+  async listen(port: number, hostname: string = "127.0.0.1"): Promise<void> {
     if (!this.server) {
       this.server = createServer(this.handleRequest.bind(this));
-      this.server.on("upgrade", this.handleUpgrade.bind(this));
+      this.server.on("upgrade", (req, socket, head) => {
+        this.handleUpgrade(req, socket, head);
+      });
     }
     return new Promise((resolve) => {
       this.server!.listen(port, hostname, () => resolve());
@@ -101,7 +103,14 @@ export class Velo {
   async close(): Promise<void> {
     if (!this.server) return;
     return new Promise((resolve, reject) => {
-      this.server!.close((err) => (err ? reject(err) : resolve()));
+      this.server!.close((err) => {
+        if (err) {
+          reject(err);
+        } else {
+          this.server = undefined;
+          resolve();
+        }
+      });
     });
   }
 
@@ -144,7 +153,7 @@ export class Velo {
     await compose(pipeline, ctx);
   }
 
-  protected async handleUpgrade(req: IncomingMessage, socket: any, head: Buffer) {
+  protected handleUpgrade(req: IncomingMessage, socket: any, head: Buffer) {
     const vReq = new Request(req, this._options);
     const matchInfo = this.wsRouter.match("GET", vReq.path);
 
@@ -155,7 +164,7 @@ export class Velo {
 
     vReq.params = matchInfo.result.params;
     const handler = matchInfo.result.handlers[0] as WebSocketHandler;
-    handleUpgrade(vReq, socket, head, handler);
+    performWebSocketUpgrade(vReq, socket, head, handler);
   }
 
   protected async defaultErrorHandler(error: Error, ctx: Context) {

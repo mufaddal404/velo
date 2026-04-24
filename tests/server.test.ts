@@ -1,59 +1,97 @@
-import { type Context } from "../src/middleware.js";
 import { test } from "node:test";
 import assert from "node:assert";
 import { Velo } from "../src/server.js";
-import { ForbiddenError } from "../src/errors.js";
+import { NotFoundError } from "../src/errors.js";
 
-test("Server - app.listen() and app.close()", async () => {
+test("Server - 70. app.listen() starts server and accepts connections", async () => {
   const app = new Velo();
-  app.get("/", (ctx: Context) => ctx.res.send("ok"));
+  app.get("/", (ctx: any) => ctx.res.send("ok"));
   await app.listen(0);
-  const address = (app as any).server.address();
-  const res = await fetch(`http://localhost:${address.port}/`);
-  assert.strictEqual(res.status, 200);
+  const port = (app as any).server.address().port;
+  try {
+    const res = await fetch(`http://localhost:${port}/`);
+    assert.strictEqual(res.status, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Server - 71. app.close() stops accepting new connections", async () => {
+  const app = new Velo();
+  await app.listen(0);
+  const port = (app as any).server.address().port;
   await app.close();
+  await assert.rejects(fetch(`http://localhost:${port}/`));
 });
 
-test("Server - Unhandled route returns 404", async () => {
+test("Server - 72. Unhandled route returns 404 via app.notFound handler", async () => {
   const app = new Velo();
+  app.notFound((ctx: any) => ctx.res.status(404).send("not found custom"));
   await app.listen(0);
-  const address = (app as any).server.address();
+  const port = (app as any).server.address().port;
   try {
-    const res = await fetch(`http://localhost:${address.port}/not-found`);
-    assert.strictEqual(res.status, 404);
+    const res = await fetch(`http://localhost:${port}/unknown`);
+    assert.strictEqual(await res.text(), "not found custom");
   } finally {
     await app.close();
   }
 });
 
-test("Server - VeloError responds with correct status", async () => {
+test("Server - 73. Throwing NotFoundError routes to error handler not notFound", async () => {
   const app = new Velo();
-  app.get("/forbidden", () => {
-    throw new ForbiddenError("No entry");
+  let errCalled = false;
+  app.onError((err, ctx) => {
+    errCalled = true;
+    ctx.res.status(404).send("error handler");
+  });
+  app.get("/throw", () => { throw new NotFoundError(); });
+  await app.listen(0);
+  const port = (app as any).server.address().port;
+  try {
+    const res = await fetch(`http://localhost:${port}/throw`);
+    assert.strictEqual(await res.text(), "error handler");
+    assert.strictEqual(errCalled, true);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Server - 74. VeloError subclass thrown in handler responds with correct status", async () => {
+  const app = new Velo();
+  app.get("/429", async () => {
+    const { TooManyRequestsError } = await import("../src/errors.js");
+    throw new TooManyRequestsError("Too fast");
   });
   await app.listen(0);
-  const address = (app as any).server.address();
+  const port = (app as any).server.address().port;
   try {
-    const res = await fetch(`http://localhost:${address.port}/forbidden`);
-    assert.strictEqual(res.status, 403);
+    const res = await fetch(`http://localhost:${port}/429`);
+    assert.strictEqual(res.status, 429);
     const data = await res.json();
-    assert.strictEqual(data.error, "No entry");
+    assert.strictEqual(data.error, "Too fast");
   } finally {
     await app.close();
   }
 });
 
-test("Server - custom notFound handler", async () => {
+test("Server - 75. Graceful shutdown waits for in-flight request to complete", async () => {
   const app = new Velo();
-  app.notFound((ctx: Context) => {
-    ctx.res.status(404).send("custom not found");
+  let completed = false;
+  app.get("/slow", async (ctx: any) => {
+    await new Promise(r => setTimeout(r, 100));
+    completed = true;
+    ctx.res.send("done");
   });
   await app.listen(0);
-  const address = (app as any).server.address();
-  try {
-    const res = await fetch(`http://localhost:${address.port}/anything`);
-    assert.strictEqual(await res.text(), "custom not found");
-  } finally {
-    await app.close();
-  }
+  const port = (app as any).server.address().port;
+  
+  const fetchPromise = fetch(`http://localhost:${port}/slow`);
+  
+  // Wait a bit and then close
+  await new Promise(r => setTimeout(r, 20));
+  const closePromise = app.close();
+  
+  const [res] = await Promise.all([fetchPromise, closePromise]);
+  assert.strictEqual(await res.text(), "done");
+  assert.strictEqual(completed, true);
 });
