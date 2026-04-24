@@ -1,7 +1,7 @@
-import { type Handler } from "./middleware.js";
+import { type Middleware } from "./middleware.js";
 
 interface RouteResult {
-  handlers: Handler[];
+  handlers: Middleware[];
   params: Record<string, string>;
 }
 
@@ -11,8 +11,8 @@ class Node {
   indices: string = "";
   paramChild?: Node;
   paramName?: string;
-  wildcardHandlers = new Map<string, Handler[]>();
-  handlers = new Map<string, Handler[]>();
+  wildcardHandlers = new Map<string, Middleware[]>();
+  handlers = new Map<string, Middleware[]>();
 
   constructor(path: string = "") {
     this.path = path;
@@ -22,12 +22,12 @@ class Node {
 export class Router {
   private root = new Node();
 
-  add(method: string, path: string, handlers: Handler[]) {
+  add(method: string, path: string, handlers: Middleware[]) {
     const methodUpper = method.toUpperCase();
     this._add(this.root, path, methodUpper, handlers);
   }
 
-  private _add(node: Node, path: string, method: string, handlers: Handler[]) {
+  private _add(node: Node, path: string, method: string, handlers: Middleware[]) {
     if (path === "") {
       node.handlers.set(method, handlers);
       return;
@@ -37,7 +37,11 @@ export class Router {
       let end = path.indexOf("/");
       if (end === -1) end = path.length;
       const paramName = path.slice(1, end);
-      if (!node.paramChild) {
+      if (node.paramChild) {
+        if (node.paramName !== paramName) {
+          throw new Error(`Route conflict: parameter name mismatch. Expected ":${node.paramName}" but got ":${paramName}" at "${path}"`);
+        }
+      } else {
         node.paramChild = new Node();
         node.paramName = paramName;
       }

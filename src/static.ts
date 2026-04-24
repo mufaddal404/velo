@@ -1,8 +1,8 @@
-import { join, resolve, normalize, sep, extname } from "node:path";
-import { statSync, createReadStream, existsSync } from "node:fs";
+import { join, resolve, normalize, sep, extname, posix } from "node:path";
+import { createReadStream, promises as fs } from "node:fs";
 import { ForbiddenError, NotFoundError } from "./errors.js";
 import { type Plugin } from "./plugin.js";
-import { createHash } from "node:crypto";
+import { type Context } from "./middleware.js";
 
 export interface StaticOptions {
   root: string;
@@ -30,8 +30,6 @@ const MIME_TYPES: Record<string, string> = {
   ".txt": "text/plain",
 };
 
-import { type Context } from "./middleware.js";
-
 export const staticFiles: Plugin<StaticOptions> = (app, options) => {
   const root = resolve(options.root);
   const prefix = options.prefix || "/";
@@ -45,18 +43,20 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
     if (ctx.req.path.includes("..")) {
       throw new ForbiddenError("Path traversal detected");
     }
+    
+    // Use posix for URL paths to avoid Windows-specific separator issues
     let path = ctx.req.path.slice(prefix.length);
     if (path.startsWith("/")) path = path.slice(1);
 
     // Path traversal protection
     const fullPath = normalize(join(root, path));
-    if (!fullPath.startsWith(root)) {
+    if (!(fullPath === root || fullPath.startsWith(root + sep))) {
       throw new ForbiddenError("Path traversal detected");
     }
 
-    // Dotfiles protection
-    const parts = path.split(sep);
-    if (parts.some((p: string) => p.startsWith("."))) {
+    // Dotfiles protection using posix path parts since URL paths always use /
+    const parts = path.split("/");
+    if (parts.some((p) => p.startsWith("."))) {
       if (dotFiles === "deny") throw new ForbiddenError("Access to dotfiles is denied");
       if (dotFiles === "ignore") throw new NotFoundError();
     }
@@ -64,10 +64,10 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
     let stats;
     let targetFile = fullPath;
     try {
-      stats = statSync(targetFile);
+      stats = await fs.stat(targetFile);
       if (stats.isDirectory()) {
         targetFile = join(targetFile, index);
-        stats = statSync(targetFile);
+        stats = await fs.stat(targetFile);
       }
     } catch (e) {
       throw new NotFoundError();
@@ -99,7 +99,7 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
 
-      if (start >= stats.size || end >= stats.size) {
+      if (isNaN(start) || isNaN(end) || start >= stats.size || end >= stats.size || start > end) {
         ctx.res.status(416).set("Content-Range", `bytes */${stats.size}`).send();
         return;
       }

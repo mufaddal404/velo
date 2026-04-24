@@ -1,4 +1,5 @@
 import { IncomingMessage } from "node:http";
+import { TLSSocket } from "node:tls";
 import { parse as parseQuery } from "node:querystring";
 import { BadRequestError, PayloadTooLargeError, BodyAlreadyConsumedError } from "./errors.js";
 
@@ -66,10 +67,16 @@ export class Request implements VeloRequest {
     let received = 0;
     const chunks: Buffer[] = [];
 
-    for await (const chunk of this.raw) {
-      received += chunk.length;
-      if (received > limit) throw new PayloadTooLargeError();
-      chunks.push(chunk);
+    try {
+      for await (const chunk of this.raw) {
+        received += chunk.length;
+        if (received > limit) throw new PayloadTooLargeError();
+        chunks.push(chunk);
+      }
+    } catch (err) {
+      // If reading fails, reset consumed flag so it can be retried or handled
+      this._bodyConsumed = false;
+      throw err;
     }
 
     this._body = Buffer.concat(chunks);
@@ -97,7 +104,12 @@ export class Request implements VeloRequest {
   get ip() {
     if (this.options.trustProxy) {
       const forwarded = this.header("x-forwarded-for");
-      if (forwarded) return forwarded.split(",")[0].trim();
+      if (forwarded) {
+        // Take the rightmost IP in X-Forwarded-For if we trust the proxy.
+        // This is safer than taking the first one which can be spoofed by the client.
+        const ips = forwarded.split(",").map(ip => ip.trim());
+        return ips[ips.length - 1];
+      }
     }
     return this.raw.socket.remoteAddress || "";
   }
@@ -110,9 +122,12 @@ export class Request implements VeloRequest {
   get protocol(): "http" | "https" {
     if (this.options.trustProxy) {
       const proto = this.header("x-forwarded-proto");
-      if (proto) return proto.split(",")[0].trim() as "http" | "https";
+      if (proto) {
+        const p = proto.split(",")[0].trim().toLowerCase();
+        if (p === "https" || p === "http") return p as "http" | "https";
+      }
     }
-    return (this.raw.socket as any).encrypted ? "https" : "http";
+    return (this.raw.socket instanceof TLSSocket && this.raw.socket.encrypted) ? "https" : "http";
   }
 
   get secure() {
@@ -127,8 +142,11 @@ export class Request implements VeloRequest {
     const cookieHeader = this.header("cookie") || "";
     const cookies: Record<string, string> = {};
     cookieHeader.split(";").forEach((pair) => {
-      const [key, value] = pair.split("=").map((s) => s.trim());
-      if (key && value) cookies[key] = value;
+      const index = pair.indexOf("=");
+      if (index === -1) return;
+      const key = pair.slice(0, index).trim();
+      const value = pair.slice(index + 1).trim();
+      if (key) cookies[key] = value;
     });
     return cookies;
   }

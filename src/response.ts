@@ -104,7 +104,7 @@ export class Response implements VeloResponse {
 
   json(data: unknown): void {
     this.type("application/json");
-    this.send(data as any);
+    this.send(data as string | Buffer | object);
   }
 
   html(body: string): void {
