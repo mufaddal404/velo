@@ -22,3 +22,7 @@
 - Refactored `tests/websocket.test.ts` to use individual top-level tests for better reliability.
 - Fixed `app.listen()` to properly handle the `error` event, preventing the promise from hanging if the port is busy.
 - Made `VeloWebSocket._readyState` private to comply with the `VeloWebSocket` interface and encapsulated state changes within `VeloWebSocketImpl`.
+- Fixed WebSocket `head` buffer processing to prevent data loss immediately after handshake (RFC 6455).
+- Unified context management across HTTP and WebSocket upgrades.
+- Removed redundant middleware wrapping overhead in route registration.
+- Improved type safety for `ctx.req.locals` and removed unsound `ServerResponse` mocks.

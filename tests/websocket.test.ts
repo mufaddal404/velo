@@ -360,3 +360,87 @@ test("WebSocket - Invalid UTF-8 in text frame closes with 1007", async () => {
     await app.close();
   }
 });
+
+test("WebSocket - head buffer processing", async () => {
+  const app = new Velo();
+  let received: any = null;
+  app.ws("/chat", { 
+    open() {}, 
+    message(ws, data) { received = data; }, 
+    close() {} 
+  });
+  await app.listen(0);
+  const port = app.port!;
+  
+  try {
+    const key = crypto.randomBytes(16).toString("base64");
+    const socket = net.createConnection(port, "127.0.0.1", () => {
+      // Send handshake AND a frame in the same packet (or very close)
+      const handshake = 
+        `GET /chat HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        "Upgrade: websocket\r\n" +
+        "Connection: Upgrade\r\n" +
+        `Sec-WebSocket-Key: ${key}\r\n` +
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+      
+      const payload = Buffer.from("instant");
+      const header = Buffer.alloc(2);
+      header[0] = 0x81; // FIN + Text
+      header[1] = 0x80 | payload.length; // Masked + length
+      
+      const mask = Buffer.from([1, 2, 3, 4]);
+      const maskedData = Buffer.alloc(payload.length);
+      for (let i = 0; i < payload.length; i++) {
+        maskedData[i] = payload[i] ^ mask[i % 4];
+      }
+      
+      socket.write(Buffer.concat([Buffer.from(handshake), header, mask, maskedData]));
+    });
+
+    for (let i = 0; i < 50; i++) { 
+      if (received === "instant") break; 
+      await new Promise(r => setTimeout(r, 10)); 
+    }
+    assert.strictEqual(received, "instant");
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - ctx.res.raw is accessible in open handler", async () => {
+  const app = new Velo();
+  let hasRaw = false;
+  app.ws("/chat", { 
+    open(ws, ctx) { 
+        hasRaw = !!ctx.res.raw;
+    }, 
+    message() {}, 
+    close() {} 
+  });
+  await app.listen(0);
+  const port = app.port!;
+  
+  try {
+    const socket = net.createConnection(port, "127.0.0.1", () => {
+      socket.write(
+        `GET /chat HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        "Upgrade: websocket\r\n" +
+        "Connection: Upgrade\r\n" +
+        `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString("base64")}\r\n` +
+        "Sec-WebSocket-Version: 13\r\n\r\n"
+      );
+    });
+
+    for (let i = 0; i < 50; i++) { 
+      if (hasRaw) break; 
+      await new Promise(r => setTimeout(r, 10)); 
+    }
+    assert.strictEqual(hasRaw, true);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});

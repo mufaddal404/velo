@@ -25,7 +25,7 @@ export interface VeloRequest<L = any> {
 
 export class Request<L = any> implements VeloRequest<L> {
   public params: Record<string, string> = {};
-  public locals: L = {} as L;
+  public locals: L = {} as any;
   private _body: Buffer | null = null;
   private _bodyConsumed = false;
 

@@ -24,7 +24,8 @@ export interface WebSocketHandler {
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
-export function handleUpgrade(req: VeloRequest, socket: Socket, head: Buffer, handler: WebSocketHandler, options: { bodyLimit?: number } = {}) {
+export function handleUpgrade(ctx: Context, socket: Socket, head: Buffer, handler: WebSocketHandler, options: { bodyLimit?: number } = {}) {
+  const { req } = ctx;
   const key = req.header("sec-websocket-key");
   const upgrade = req.header("upgrade");
   const connection = req.header("connection");
@@ -45,11 +46,19 @@ export function handleUpgrade(req: VeloRequest, socket: Socket, head: Buffer, ha
   );
 
   const ws = new VeloWebSocketImpl(socket, req.params, options.bodyLimit);
-  // Create a minimal response that doesn't cause crashes but throws if used improperly
-  const vRes = new Response(null as unknown as ServerResponse, options);
-  const ctx: Context = { req, res: vRes };
 
   handler.open(ws, ctx);
+
+  if (head && head.length > 0) {
+    try {
+        ws.handleData(head, handler);
+    } catch (err: unknown) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        if (handler.error) handler.error(ws, error);
+        socket.destroy();
+        return;
+    }
+  }
 
   socket.on("data", (data: Buffer) => {
     try {

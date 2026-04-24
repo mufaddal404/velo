@@ -129,14 +129,10 @@ export class Velo<L = any> {
   private addRoute(method: string, path: string, handlers: (Handler<L> | Middleware<L>)[]) {
     const fullPath = this.basePath + path;
     const entry: RouteEntry = {
-      handlers: handlers.map(h => this.wrapHandler(h)) as Middleware[],
+      handlers: handlers as Middleware[],
       scope: this
     };
     this.router.add(method, fullPath, entry);
-  }
-
-  private wrapHandler(handler: Handler<L> | Middleware<L>): Middleware<L> {
-    return (ctx, next) => (handler as Middleware<L>)(ctx, next);
   }
 
   group(prefix: string): Velo<L> {
@@ -320,7 +316,7 @@ export class Velo<L = any> {
         if (wsHandler) {
             // If it's a websocket upgrade, we should NOT have sent a response yet
             if (!vRes.sent) {
-                performWebSocketUpgrade(vReq as any, socket, head, wsHandler, this._options);
+                performWebSocketUpgrade(c, socket, head, wsHandler, this._options);
                 vRes.sent = true; // Mark as sent so we don't try to send more
             }
         }
