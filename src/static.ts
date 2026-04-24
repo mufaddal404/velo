@@ -104,8 +104,22 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
     const range = ctx.req.header("range");
     if (range) {
       const parts = range.replace(/bytes=/, "").split("-");
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      let start: number;
+      let end: number;
+
+      if (parts[0] === "") {
+        // Suffix range: bytes=-500
+        const suffix = parseInt(parts[1], 10);
+        if (isNaN(suffix)) {
+          ctx.res.status(416).set("Content-Range", `bytes */${stats.size}`).send();
+          return;
+        }
+        start = Math.max(0, stats.size - suffix);
+        end = stats.size - 1;
+      } else {
+        start = parseInt(parts[0], 10);
+        end = parts[1] ? parseInt(parts[1], 10) : stats.size - 1;
+      }
 
       if (isNaN(start) || isNaN(end) || start >= stats.size || end >= stats.size || start > end) {
         ctx.res.status(416).set("Content-Range", `bytes */${stats.size}`).send();

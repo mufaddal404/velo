@@ -135,6 +135,35 @@ test("Request - 22. Calling json() twice throws BodyAlreadyConsumedError", async
   }
 });
 
+test("Request - Request.buffer() should remain consumed even after error", async () => {
+  const app = new Velo({ bodyLimit: 5 });
+  app.post("/", async (ctx: Context) => {
+    try {
+      await ctx.req.buffer();
+    } catch (e) {
+      // First attempt failed (PayloadTooLargeError)
+      try {
+        await ctx.req.buffer();
+        ctx.res.send("should have failed again");
+      } catch (e2: any) {
+        ctx.res.send(e2.name);
+      }
+    }
+  });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/`, {
+      method: "POST",
+      body: "too long"
+    });
+    const text = await res.text();
+    assert.strictEqual(text, "BodyAlreadyConsumedError");
+  } finally {
+    await app.close();
+  }
+});
+
 test("Request - 23. cookies parsed correctly from Cookie header", async () => {
   const app = new Velo();
   let cookies: any = null;

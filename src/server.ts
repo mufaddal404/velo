@@ -288,7 +288,12 @@ export class Velo<L = any> {
     
     vReq.params = { ...vReq.params, ...matchInfo.result.params };
 
-    const vRes = new Response(null as unknown as ServerResponse, this._options);
+    // Create a mock ServerResponse that writes to the socket
+    // This allows middleware and error handlers to use ctx.res
+    const res = new ServerResponse(req);
+    res.assignSocket(socket);
+
+    const vRes = new Response(res, this._options);
     const ctx: Context<L> = { req: vReq, res: vRes };
 
     const pipeline: Middleware<L>[] = [];
@@ -313,23 +318,45 @@ export class Velo<L = any> {
     pipeline.push(async (c) => {
         wsHandler = (c as VeloInternalContext)._wsHandler;
         if (wsHandler) {
-            performWebSocketUpgrade(vReq as any, socket, head, wsHandler, this._options);
+            // If it's a websocket upgrade, we should NOT have sent a response yet
+            if (!vRes.sent) {
+                performWebSocketUpgrade(vReq as any, socket, head, wsHandler, this._options);
+                vRes.sent = true; // Mark as sent so we don't try to send more
+            }
         }
     });
 
     try {
         await compose(pipeline, ctx);
+        if (!vRes.sent) {
+            throw new InternalServerError("Response not sent by handlers");
+        }
     } catch (err: unknown) {
-        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
-        socket.destroy();
+        const error = err instanceof Error ? err : new Error(String(err));
+        await this.errorHandler(error, ctx);
+        if (!vRes.sent) {
+            socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+            socket.destroy();
+        } else {
+            // Even if sent, for upgrade requests that failed we should probably ensure socket is closed
+            // if it wasn't a 101 Switching Protocols.
+            if (res.statusCode !== 101) {
+                process.nextTick(() => socket.destroy());
+            }
+        }
     }
   }
 
   protected async defaultErrorHandler(error: Error, ctx: Context<L>) {
     if (ctx.res.sent) return;
 
-    const status = error instanceof VeloError ? error.status : 500;
-    const message = error instanceof VeloError ? error.message : "Internal Server Error";
+    let status = error instanceof VeloError ? error.status : 500;
+    // If the response status was already set to something other than 200, respect it
+    if (ctx.res.getStatus() !== 200 && !(error instanceof VeloError)) {
+        status = ctx.res.getStatus();
+    }
+    
+    const message = error instanceof VeloError ? error.message : error.message || "Internal Server Error";
 
     const body: Record<string, unknown> = {
       error: message,

@@ -138,6 +138,67 @@ test("Static - 50. Range request returns 206 with correct byte slice", async () 
   }
 });
 
+test("Static - Range Suffix Support (bytes=-3)", async () => {
+  fs.writeFileSync(path.join(PUBLIC_DIR, "suffix.txt"), "0123456789");
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/suffix.txt`, {
+      headers: { "Range": "bytes=-3" }
+    });
+    assert.strictEqual(res.status, 206);
+    assert.strictEqual(await res.text(), "789");
+    assert.strictEqual(res.headers.get("content-range"), "bytes 7-9/10");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Static - Range Suffix Large (bytes=-999)", async () => {
+  fs.writeFileSync(path.join(PUBLIC_DIR, "large-suffix.txt"), "abc");
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/large-suffix.txt`, {
+      headers: { "Range": "bytes=-999" }
+    });
+    assert.strictEqual(res.status, 206);
+    assert.strictEqual(await res.text(), "abc");
+    assert.strictEqual(res.headers.get("content-range"), "bytes 0-2/3");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Static - Invalid Range", async () => {
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res1 = await fetch(`http://localhost:${port}/range.txt`, {
+      headers: { "Range": "bytes=abc-" }
+    });
+    assert.strictEqual(res1.status, 416);
+
+    const res2 = await fetch(`http://localhost:${port}/range.txt`, {
+      headers: { "Range": "bytes=-abc" }
+    });
+    assert.strictEqual(res2.status, 416);
+
+    const res3 = await fetch(`http://localhost:${port}/range.txt`, {
+      headers: { "Range": "bytes=10-5" }
+    });
+    assert.strictEqual(res3.status, 416);
+  } finally {
+    await app.close();
+  }
+});
+
 test("Static - 51. Directory request with index file serves the index", async () => {
   fs.mkdirSync(path.join(PUBLIC_DIR, "dir"), { recursive: true });
   fs.writeFileSync(path.join(PUBLIC_DIR, "dir", "index.html"), "index content");

@@ -218,6 +218,124 @@ test("WebSocket - 42. Route params available in ws.params", async () => {
   }
 });
 
+test("WebSocket - Upgrade Error Handling respects error handler and ctx.res", async () => {
+  const app = new Velo();
+  
+  app.use("/ws", (ctx, next) => {
+    ctx.res.status(403);
+    throw new Error("Custom error");
+  });
+
+  app.ws("/ws", {
+    open: () => {},
+    message: () => {},
+    close: () => {}
+  });
+
+  await app.listen(0);
+  const port = app.port!;
+
+  try {
+    const data = await new Promise<string>((resolve, reject) => {
+      const client = net.connect(port, "127.0.0.1", () => {
+        client.write(
+          "GET /ws HTTP/1.1\r\n" +
+          "Host: 127.0.0.1\r\n" +
+          "Connection: Upgrade\r\n" +
+          "Upgrade: websocket\r\n" +
+          "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+          "Sec-WebSocket-Version: 13\r\n" +
+          "\r\n"
+        );
+      });
+
+      let buf = "";
+      const timeout = setTimeout(() => {
+        client.destroy();
+        reject(new Error("Timeout waiting for data. Got: " + buf));
+      }, 2000);
+
+      client.on("data", (chunk) => {
+        buf += chunk.toString();
+        if (buf.includes("Custom error")) {
+          clearTimeout(timeout);
+          client.destroy();
+          resolve(buf);
+        }
+      });
+
+      client.on("end", () => {
+        clearTimeout(timeout);
+        resolve(buf);
+      });
+      client.on("error", (err) => {
+        clearTimeout(timeout);
+        if (buf.includes("Custom error")) {
+          resolve(buf);
+        } else {
+          reject(err);
+        }
+      });
+    });
+
+    assert.ok(data.includes("HTTP/1.1 403"), `Should have 403 status. Got: ${data.split('\r\n')[0]}`);
+    assert.ok(data.includes("Custom error"), "Should include custom error message");
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - Rejects fragmented control frames", async () => {
+  const app = new Velo();
+  let errorOccurred = false;
+  app.ws("/ws", {
+    open() {},
+    message() {},
+    close() {},
+    error() { errorOccurred = true; }
+  });
+  await app.listen(0);
+  const port = app.port!;
+  try {
+    const { socket } = await rawConnect(port, "/ws");
+    // Ping (0x09) with FIN=0
+    sendFrame(socket, 9, "ping", false);
+    for (let i = 0; i < 50; i++) {
+      if (errorOccurred) break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.strictEqual(errorOccurred, true);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - Rejects payload larger than bodyLimit", async () => {
+  const app = new Velo({ bodyLimit: 10 });
+  let errorOccurred = false;
+  app.ws("/ws", {
+    open() {},
+    message() {},
+    close() {},
+    error() { errorOccurred = true; }
+  });
+  await app.listen(0);
+  const port = app.port!;
+  try {
+    const { socket } = await rawConnect(port, "/ws");
+    sendFrame(socket, 1, "this is a very long message indeed");
+    for (let i = 0; i < 50; i++) {
+      if (errorOccurred) break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.strictEqual(errorOccurred, true);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
 test("WebSocket - Invalid UTF-8 in text frame closes with 1007", async () => {
   const app = new Velo();
   let errorCode: number | null = null;

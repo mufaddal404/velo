@@ -74,8 +74,6 @@ export class Request<L = any> implements VeloRequest<L> {
         chunks.push(chunk);
       }
     } catch (err) {
-      // If reading fails, reset consumed flag so it can be retried or handled
-      this._bodyConsumed = false;
       throw err;
     }
 
