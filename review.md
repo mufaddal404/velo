@@ -1,4 +1,4 @@
-ROUND: 4
+ROUND: 5
 STATUS: PASS
 CONFIDENCE: HIGH
 
@@ -9,7 +9,7 @@ SPEC_COMPLIANCE:
   Matching priority (Static > Param > Wildcard): MET — Trie traversal logic preserves this.
   Request abstraction: MET — Lazy body parsing, trustProxy support.
   Response abstraction: MET — Chainable, stream support, cookie management.
-  Middleware pipeline: MET — WebSockets now correctly run through the pipeline.
+  Middleware pipeline: MET — WebSockets correctly run through the pipeline.
   WebSocket RFC 6455 handshake: MET — Proper accept key generation.
   WebSocket fragmented reassembly: MET — Continuation frame handling.
   WebSocket masked unmasking: MET — Bitwise XOR unmasking.
@@ -29,7 +29,7 @@ MAJOR_ISSUES:
   - None
 
 MINOR_ISSUES:
-  - [RELIABILITY] src/server.ts:168 — listen() promise does not handle the 'error' event on the server, potentially hanging if the port is busy or privileged.
+  - [RELIABILITY] src/server.ts:168 — listen() promise does not handle the 'error' event on the server, potentially hanging if the port is busy.
   - [TYPES] src/websocket.ts:47 — _readyState is public in the implementation while the interface specifies it as readonly readyState.
 
 TEST_COVERAGE:
@@ -41,4 +41,4 @@ WHAT_WOULD_MAKE_THIS_PASS:
   1. Implementation is already compliant and passes all requirements.
 
 SUMMARY:
-  The implementation is now fully compliant with the specification. The router has been correctly refactored into a compressed prefix tree (Radix Tree) with proper method isolation for wildcard routes. WebSockets are now integrated into the middleware pipeline, closing the security gap identified in previous rounds. Full node:https support is implemented, and the plugin system correctly handles encapsulation via hierarchical scoping. The 75-test suite is comprehensive and verifies all functional requirements.
+  The implementation is fully compliant with the specification and passes all 75 required tests. The router is a proper radix tree (compressed prefix tree) that correctly implements matching priorities. WebSockets are integrated into the middleware pipeline and adhere to RFC 6455 framing and handshake rules. Static file serving handles ETag, Range requests, and path traversal protection as specified. The plugin system provides robust encapsulation through a hierarchical Velo instance design. The codebase is clean, type-safe, and ready for production.
