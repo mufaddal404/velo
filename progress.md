@@ -20,3 +20,5 @@
 - Added connection tracking to `Velo` to ensure all upgraded WebSocket connections are terminated during `app.close()`.
 - Re-enabled and fixed Test 67 in `tests/plugin.test.ts`.
 - Refactored `tests/websocket.test.ts` to use individual top-level tests for better reliability.
+- Fixed `app.listen()` to properly handle the `error` event, preventing the promise from hanging if the port is busy.
+- Made `VeloWebSocket._readyState` private to comply with the `VeloWebSocket` interface and encapsulated state changes within `VeloWebSocketImpl`.

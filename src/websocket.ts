@@ -51,10 +51,7 @@ export function handleUpgrade(req: VeloRequest, socket: any, head: Buffer, handl
   });
 
   socket.on("close", () => {
-    if (ws.readyState !== "closed") {
-      ws._readyState = "closed";
-      handler.close(ws, 1000, "");
-    }
+    ws.handleSocketClose(handler);
   });
 
   socket.on("error", (err: Error) => {
@@ -64,13 +61,20 @@ export function handleUpgrade(req: VeloRequest, socket: any, head: Buffer, handl
 }
 
 class VeloWebSocketImpl implements VeloWebSocket {
-  public _readyState: "open" | "closing" | "closed" = "open";
+  private _readyState: "open" | "closing" | "closed" = "open";
   public locals: Record<string, unknown> = {};
   private buffer = Buffer.alloc(0);
 
   constructor(private socket: any, public params: Record<string, string>) {}
 
   get readyState() { return this._readyState; }
+
+  handleSocketClose(handler: WebSocketHandler) {
+    if (this._readyState !== "closed") {
+      this._readyState = "closed";
+      handler.close(this, 1000, "");
+    }
+  }
 
   send(data: string | Buffer) {
     if (this._readyState !== "open") return;

@@ -129,8 +129,15 @@ export class Velo {
         root.handleUpgrade(req, socket, head);
       });
     }
-    return new Promise((resolve) => {
-      root.server!.listen(port, hostname, () => resolve());
+    return new Promise((resolve, reject) => {
+      const onError = (err: Error) => {
+        reject(err);
+      };
+      root.server!.once("error", onError);
+      root.server!.listen(port, hostname, () => {
+        root.server!.removeListener("error", onError);
+        resolve();
+      });
     });
   }
 
