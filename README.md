@@ -1,6 +1,6 @@
-# Velo
+# Velo — A Low-Level Node.js HTTP Server
 
-A low-level, high-performance HTTP server library for Node.js with zero dependencies.
+Velo is a high-performance, low-level HTTP server library for Node.js, built directly on top of the native `http` and `https` modules with zero external dependencies.
 
 ## Installation
 
@@ -20,116 +20,192 @@ app.get("/", (ctx) => {
 });
 
 await app.listen(3000);
-console.log("Server running on http://localhost:3000");
 ```
 
 ## Routing
 
-Velo uses a radix tree router for efficient path matching. It supports static routes, named parameters, and wildcards.
+Velo uses a high-performance radix tree router.
 
 ```typescript
 // Named parameters
 app.get("/users/:id", (ctx) => {
-  const id = ctx.req.params.id;
-  ctx.res.json({ id });
+  ctx.res.json({ userId: ctx.req.params.id });
 });
 
 // Wildcards
-app.get("/files/*", (ctx) => {
-  const path = ctx.req.params["*"];
-  ctx.res.send(`Accessing ${path}`);
+app.get("/static/*", (ctx) => {
+  ctx.res.send(`Path: ${ctx.req.params["*"]}`);
 });
 
+// Match all methods
+app.all("/ping", (ctx) => ctx.res.send("pong"));
+
 // Route groups
-const api = app.group("/api/v1");
-api.get("/ping", (ctx) => ctx.res.send("pong"));
+const v1 = app.group("/api/v1");
+v1.get("/users", (ctx) => { /* ... */ });
 ```
 
 ## Middleware
 
+Middlewares follow the `(ctx, next) => void | Promise<void>` signature.
+
 ```typescript
 // Global middleware
 app.use(async (ctx, next) => {
-  const start = Date.now();
+  console.log(`${ctx.req.method} ${ctx.req.path}`);
   await next();
-  console.log(`${ctx.req.method} ${ctx.req.path} - ${Date.now() - start}ms`);
 });
 
 // Prefix-scoped middleware
 app.use("/admin", authMiddleware);
+
+// Route-level middleware
+app.get("/secret", secretMiddleware, (ctx) => {
+  ctx.res.send("shhh!");
+});
+```
+
+## Request
+
+Wraps Node's `IncomingMessage` with convenient helpers.
+
+```typescript
+app.post("/data", async (ctx) => {
+  const body = await ctx.req.json(); // or .text(), .buffer()
+  const query = ctx.req.query;
+  const cookie = ctx.req.cookies.session;
+  const userAgent = ctx.req.header("user-agent");
+  
+  console.log(ctx.req.ip, ctx.req.hostname, ctx.req.protocol);
+});
+```
+
+## Response
+
+Wraps Node's `ServerResponse` with a chainable API.
+
+```typescript
+app.get("/res", (ctx) => {
+  ctx.res
+    .status(201)
+    .type("application/json")
+    .cookie("pref", "dark", { httpOnly: true })
+    .send({ ok: true });
+});
+
+// Redirects
+ctx.res.redirect("/login");
+
+// Streaming
+ctx.res.stream(fs.createReadStream("large-file.zip"));
 ```
 
 ## WebSocket
 
-Velo includes a built-in RFC 6455 compliant WebSocket implementation.
+RFC 6455 compliant WebSockets without external dependencies.
 
 ```typescript
 app.ws("/chat/:room", {
   open(ws, ctx) {
-    console.log(`User joined ${ws.params.room}`);
+    ws.locals.user = "Anonymous";
+    console.log(`Joined room: ${ws.params.room}`);
   },
   message(ws, data) {
     ws.send(`Echo: ${data}`);
   },
   close(ws, code, reason) {
-    console.log("Closed", code, reason);
+    console.log(`Left room: ${ws.params.room}`);
   }
 });
 ```
 
 ## Static Files
 
+Built-in static file serving with ETag, Range support, and security features.
+
 ```typescript
-import { staticFiles } from "velo/static";
+import { staticFiles } from "velo";
 
 app.register(staticFiles, {
   root: "./public",
-  prefix: "/static"
+  prefix: "/static",
+  dotFiles: "deny",
+  index: "index.html",
+  maxAge: 3600
 });
 ```
 
 ## Validation
 
-Built-in minimal schema validator.
+Fast, built-in schema validation.
 
 ```typescript
-import { v, validate } from "velo/validation";
+import { v, validate } from "velo";
 
-const userSchema = v.object({
-  name: v.string().minLength(2),
-  age: v.number().min(0)
+const schema = v.object({
+  email: v.string().email(),
+  age: v.number().min(18).optional()
 });
 
-app.post("/users", validate({ body: userSchema }), (ctx) => {
-  const user = ctx.req.locals.validated.body;
-  ctx.res.status(201).json(user);
+app.post("/register", validate({ body: schema }), (ctx) => {
+  const data = ctx.req.locals.validated.body;
+  // data is fully typed
+});
+```
+
+## Plugin System
+
+Modularize your application using plugins and scopes.
+
+```typescript
+// Define a plugin
+const myPlugin = async (app, options) => {
+  app.get("/plugin-route", (ctx) => ctx.res.send(options.msg));
+};
+
+// Register with options
+app.register(myPlugin, { msg: "Hello from plugin" });
+
+// Scoped plugins (middleware/routes don't leak out)
+await app.register(async (instance) => {
+  instance.use(authMiddleware);
+  instance.get("/private", (ctx) => { /* ... */ });
 });
 ```
 
 ## Error Handling
 
-```typescript
-import { ForbiddenError } from "velo";
+Customizable error handling with built-in error types.
 
-app.get("/secret", (ctx) => {
-  throw new ForbiddenError("Not allowed here");
+```typescript
+import { NotFoundError } from "velo";
+
+app.get("/missing", () => {
+  throw new NotFoundError("Not here!");
 });
 
 app.onError((err, ctx) => {
-  ctx.res.status(500).json({ custom: "error" });
+  if (err instanceof NotFoundError) {
+    ctx.res.status(404).json({ error: "Custom 404" });
+    return;
+  }
+  ctx.res.status(500).json({ error: "Internal Error" });
 });
 ```
 
-## TypeScript Decorators
+## TypeScript
 
-You can decorate the app instance and maintain type safety.
+Extend the Velo types for your application.
 
 ```typescript
 declare module "velo" {
   interface Velo {
-    db: DatabaseConnection;
+    db: any;
+  }
+  interface VeloRequest {
+    user?: { id: string };
   }
 }
 
-app.decorate("db", myDbConnection);
+app.decorate("db", db);
 ```
