@@ -444,3 +444,40 @@ test("WebSocket - ctx.res.raw is accessible in open handler", async () => {
     await app.close();
   }
 });
+
+test("WebSocket - Nested middleware lineage collection", async () => {
+  const app = new Velo();
+  const order: string[] = [];
+  
+  app.use((ctx, next) => {
+    order.push("global");
+    return next();
+  });
+
+  const group = app.group("/v1");
+  group.use((ctx, next) => {
+    order.push("group");
+    return next();
+  });
+
+  group.ws("/chat", {
+    open() { order.push("open"); },
+    message() {},
+    close() {}
+  });
+
+  await app.listen(0);
+  const port = app.port!;
+
+  try {
+    const { socket } = await rawConnect(port, "/v1/chat");
+    for (let i = 0; i < 50; i++) {
+      if (order.length >= 3) break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.deepStrictEqual(order, ["global", "group", "open"]);
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});

@@ -158,9 +158,13 @@ export class Velo<L = any> {
 
       if (root._options.headersTimeout) root.server.headersTimeout = root._options.headersTimeout;
       if (root._options.keepAliveTimeout) root.server.keepAliveTimeout = root._options.keepAliveTimeout;
+      
       // requestTimeout is available from Node 14.11.0
-      if (root._options.requestTimeout && (root.server as any).requestTimeout !== undefined) {
-        (root.server as any).requestTimeout = root._options.requestTimeout;
+      if (root._options.requestTimeout) {
+        const server = root.server as HttpServer & { requestTimeout?: number };
+        if (server.requestTimeout !== undefined) {
+          server.requestTimeout = root._options.requestTimeout;
+        }
       }
       
       root.server.on("connection", (socket: Socket) => {
@@ -221,6 +225,25 @@ export class Velo<L = any> {
     return curr;
   }
 
+  protected getMiddlewarePipeline(path: string, scope: Velo<any>): Middleware<L>[] {
+    const pipeline: Middleware<L>[] = [];
+    const lineage: Velo<any>[] = [];
+    let curr: Velo<any> | null = scope;
+    while (curr) {
+      lineage.unshift(curr);
+      curr = curr.parent;
+    }
+
+    for (const s of lineage) {
+      for (const mw of s.middlewares) {
+        if (path.startsWith(mw.prefix)) {
+          pipeline.push(mw.fn);
+        }
+      }
+    }
+    return pipeline;
+  }
+
   protected async handleRequest(req: IncomingMessage, res: ServerResponse) {
     const vReq = new Request<L>(req, this._options);
     const vRes = new Response(res, this._options);
@@ -245,20 +268,7 @@ export class Velo<L = any> {
     if (matchInfo.result) {
       const { handlers, scope } = matchInfo.result.handlers;
       
-      const lineage: Velo<any>[] = [];
-      let curr: Velo<any> | null = scope;
-      while (curr) {
-        lineage.unshift(curr);
-        curr = curr.parent;
-      }
-      
-      for (const s of lineage) {
-        for (const mw of s.middlewares) {
-          if (ctx.req.path.startsWith(mw.prefix)) {
-            pipeline.push(mw.fn);
-          }
-        }
-      }
+      pipeline.push(...this.getMiddlewarePipeline(ctx.req.path, scope));
 
       ctx.req.params = { ...ctx.req.params, ...matchInfo.result.params };
       pipeline.push(...(handlers as Middleware<L>[]));
@@ -292,21 +302,7 @@ export class Velo<L = any> {
     const vRes = new Response(res, this._options);
     const ctx: Context<L> = { req: vReq, res: vRes };
 
-    const pipeline: Middleware<L>[] = [];
-    const lineage: Velo<any>[] = [];
-    let curr: Velo<any> | null = scope;
-    while (curr) {
-      lineage.unshift(curr);
-      curr = curr.parent;
-    }
-
-    for (const s of lineage) {
-      for (const mw of s.middlewares) {
-        if (vReq.path.startsWith(mw.prefix)) {
-          pipeline.push(mw.fn);
-        }
-      }
-    }
+    const pipeline: Middleware<L>[] = this.getMiddlewarePipeline(vReq.path, scope);
 
     let wsHandler: WebSocketHandler | undefined;
 
@@ -370,7 +366,7 @@ export class Velo<L = any> {
 
   async register<T>(plugin: Plugin<T>, options?: T) {
     const scope = this.scope();
-    await plugin(scope as any, options as T);
+    await plugin(scope, options as T);
   }
 
   decorate(name: string, value: unknown) {
@@ -385,7 +381,7 @@ export class Velo<L = any> {
     });
   }
 
-  scope() {
-    return new Velo(this._options, this, this.basePath);
+  scope(): Velo<L> {
+    return new Velo<L>(this._options, this, this.basePath);
   }
 }
