@@ -53,7 +53,7 @@ test("Router - 6. Group prefix is prepended to all routes in the group", async (
   api.get("/users", handler);
   
   // We check the internal router of the app
-  const { result } = (app as any).router.match("GET", "/api/v1/users");
+  const { result } = app.router.match("GET", "/api/v1/users");
   assert.ok(result);
 });
 
@@ -62,15 +62,15 @@ test("Router - 7. app.all() matches GET, POST, DELETE for the same path", async 
   const handler = () => {};
   app.all("/all", handler);
   
-  assert.ok((app as any).router.match("GET", "/all").result);
-  assert.ok((app as any).router.match("POST", "/all").result);
-  assert.ok((app as any).router.match("DELETE", "/all").result);
+  assert.ok(app.router.match("GET", "/all").result);
+  assert.ok(app.router.match("POST", "/all").result);
+  assert.ok(app.router.match("DELETE", "/all").result);
 });
 
 test("Router - 8. Unknown path returns 404", async () => {
   const app = new Velo();
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/unknown`);
     assert.strictEqual(res.status, 404);
@@ -83,7 +83,7 @@ test("Router - 9. Known path with wrong method returns 405", async () => {
   const app = new Velo();
   app.get("/users", () => {});
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/users`, { method: "POST" });
     assert.strictEqual(res.status, 405);

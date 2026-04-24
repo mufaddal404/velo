@@ -14,7 +14,7 @@ test("Static - 43. Existing file served with correct Content-Type", async () => 
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/test.txt`);
     assert.strictEqual(res.status, 200);
@@ -29,7 +29,7 @@ test("Static - 44. Non-existent file returns 404", async () => {
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/not-found.txt`);
     assert.strictEqual(res.status, 404);
@@ -44,7 +44,7 @@ test("Static - 45. Path with .. returns 403", async () => {
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const res = await new Promise<http.IncomingMessage>((resolve) => {
       const req = http.request({
@@ -66,7 +66,7 @@ test("Static - 46. Dotfile with dotFiles: 'deny' returns 403", async () => {
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR, dotFiles: "deny" });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/.secret`);
     assert.strictEqual(res.status, 403);
@@ -79,7 +79,7 @@ test("Static - 47. Dotfile with dotFiles: 'ignore' returns 404", async () => {
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR, dotFiles: "ignore" });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/.secret`);
     assert.strictEqual(res.status, 404);
@@ -92,7 +92,7 @@ test("Static - 48. Dotfile with dotFiles: 'allow' is served", async () => {
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR, dotFiles: "allow" });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/.secret`);
     assert.strictEqual(res.status, 200);
@@ -106,7 +106,7 @@ test("Static - 49. ETag header present; second request with matching If-None-Mat
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res1 = await fetch(`http://localhost:${port}/test.txt`);
     const etag = res1.headers.get("etag");
@@ -126,7 +126,7 @@ test("Static - 50. Range request returns 206 with correct byte slice", async () 
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/range.txt`, {
       headers: { "Range": "bytes=2-5" }
@@ -144,7 +144,7 @@ test("Static - 51. Directory request with index file serves the index", async ()
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/dir/`);
     assert.strictEqual(await res.text(), "index content");
@@ -157,12 +157,51 @@ test("Static - 52. prefix option restricts serving to that URL prefix", async ()
   const app = new Velo();
   app.register(staticFiles, { root: PUBLIC_DIR, prefix: "/static" });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res1 = await fetch(`http://localhost:${port}/test.txt`);
     assert.strictEqual(res1.status, 404);
     const res2 = await fetch(`http://localhost:${port}/static/test.txt`);
     assert.strictEqual(res2.status, 200);
+  } finally {
+    await app.close();
+  }
+});
+
+test("Static - URI Decoding", async () => {
+  const reproDir = "./tests/public_repro";
+  if (!fs.existsSync(reproDir)) fs.mkdirSync(reproDir, { recursive: true });
+  fs.writeFileSync(path.join(reproDir, "space file.txt"), "space content");
+  
+  const app = new Velo();
+  app.register(staticFiles, { root: reproDir });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/space%20file.txt`);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(await res.text(), "space content");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Static - Path Traversal with encoded characters", async () => {
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR });
+  await app.listen(0);
+  const port = app.port!;
+  try {
+    const res = await new Promise<http.IncomingMessage>((resolve) => {
+      const req = http.request({
+        port,
+        hostname: "localhost",
+        path: "/%2e%2e/package.json",
+        method: "GET"
+      }, resolve);
+      req.end();
+    });
+    assert.strictEqual(res.statusCode, 403);
   } finally {
     await app.close();
   }

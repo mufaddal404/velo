@@ -59,7 +59,7 @@ test("WebSocket - 34. Valid handshake produces correct Sec-WebSocket-Accept", as
   const app = new Velo();
   app.ws("/chat", { open() {}, message() {}, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const key = crypto.randomBytes(16).toString("base64");
     const expectedAccept = crypto.createHash("sha1").update(key + GUID).digest("base64");
@@ -75,7 +75,7 @@ test("WebSocket - 35. Missing Upgrade header rejected with 400", async () => {
   const app = new Velo();
   app.ws("/chat", { open() {}, message() {}, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const res = await new Promise<string>((resolve) => {
       const socket = net.createConnection(port, "127.0.0.1", () => {
@@ -97,7 +97,7 @@ test("WebSocket - 36. open callback fires after successful handshake", async () 
   let opened = false;
   app.ws("/chat", { open() { opened = true; }, message() {}, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     for (let i = 0; i < 50; i++) { if (opened) break; await new Promise(r => setTimeout(r, 10)); }
@@ -113,7 +113,7 @@ test("WebSocket - 37. Text message delivered to message handler", async () => {
   let received: any = null;
   app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     sendFrame(socket, 1, "hello");
@@ -130,7 +130,7 @@ test("WebSocket - 38. Binary message delivered to message handler", async () => 
   let received: any = null;
   app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     const buf = Buffer.from([1, 2, 3]);
@@ -147,7 +147,7 @@ test("WebSocket - 39. Ping frame triggers automatic pong response", async () => 
   const app = new Velo();
   app.ws("/chat", { open() {}, message() {}, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     const pongPromise = new Promise<Buffer>((resolve) => { 
@@ -169,7 +169,7 @@ test("WebSocket - 40. Fragmented message reassembled before delivery", async () 
   let received: any = null;
   app.ws("/chat", { open() {}, message(ws, data) { received = data; }, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     sendFrame(socket, 1, "hel", false);
@@ -187,7 +187,7 @@ test("WebSocket - 41. close callback fires with correct code and reason", async 
   let closed: any = null;
   app.ws("/chat", { open() {}, message() {}, close(ws, code, reason) { closed = { code, reason }; } });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat");
     const payload = Buffer.alloc(5);
@@ -207,11 +207,36 @@ test("WebSocket - 42. Route params available in ws.params", async () => {
   let wsParams: any = null;
   app.ws("/chat/:room", { open(ws) { wsParams = ws.params; }, message() {}, close() {} });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port!;
   try {
     const { socket } = await rawConnect(port, "/chat/room123");
     for (let i = 0; i < 50; i++) { if (wsParams) break; await new Promise(r => setTimeout(r, 10)); }
     assert.deepStrictEqual(wsParams, { room: "room123" });
+    socket.destroy();
+  } finally {
+    await app.close();
+  }
+});
+
+test("WebSocket - Invalid UTF-8 in text frame closes with 1007", async () => {
+  const app = new Velo();
+  let errorCode: number | null = null;
+  app.ws("/ws", {
+    open() {},
+    message() {},
+    close(ws, code) { errorCode = code; }
+  });
+  await app.listen(0);
+  const port = app.port!;
+  try {
+    const { socket } = await rawConnect(port, "/ws");
+    const invalidUtf8 = Buffer.from([0xFF, 0xFF]);
+    sendFrame(socket, 1, invalidUtf8);
+    for (let i = 0; i < 50; i++) {
+      if (errorCode !== null) break;
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.strictEqual(errorCode, 1007);
     socket.destroy();
   } finally {
     await app.close();

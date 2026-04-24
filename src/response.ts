@@ -125,7 +125,7 @@ export class Response implements VeloResponse {
   }
 
   cookie(name: string, value: string, options: CookieOptions = {}): this {
-    let str = `${name}=${value}`;
+    let str = `${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
 
     if (options.maxAge !== undefined) {
         str += `; Max-Age=${options.maxAge}`;

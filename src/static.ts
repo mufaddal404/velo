@@ -40,12 +40,20 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
 
   const routePrefix = prefix.endsWith("/") ? prefix : prefix + "/";
   app.get(routePrefix + "*", async (ctx: Context) => {
-    if (ctx.req.path.includes("..")) {
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(ctx.req.path);
+    } catch (e) {
+      ctx.res.status(400).send("Invalid URI");
+      return;
+    }
+
+    if (decodedPath.includes("..")) {
       throw new ForbiddenError("Path traversal detected");
     }
     
     // Use posix for URL paths to avoid Windows-specific separator issues
-    let path = ctx.req.path.slice(prefix.length);
+    let path = decodedPath.slice(prefix.length);
     if (path.startsWith("/")) path = path.slice(1);
 
     // Path traversal protection

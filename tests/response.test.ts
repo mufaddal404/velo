@@ -2,12 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { Velo } from "../src/server.js";
 import { Readable } from "node:stream";
+import { type Context } from "../src/middleware.js";
 
 test("Response - 26. send(object) sets Content-Type: application/json", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => ctx.res.send({ a: 1 }));
+  app.get("/", (ctx: Context) => ctx.res.send({ a: 1 }));
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     assert.strictEqual(res.headers.get("content-type"), "application/json");
@@ -19,9 +20,9 @@ test("Response - 26. send(object) sets Content-Type: application/json", async ()
 
 test("Response - 27. send(string) sets Content-Type: text/plain", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => ctx.res.send("hello"));
+  app.get("/", (ctx: Context) => ctx.res.send("hello"));
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     assert.strictEqual(res.headers.get("content-type"), "text/plain");
@@ -33,9 +34,9 @@ test("Response - 27. send(string) sets Content-Type: text/plain", async () => {
 
 test("Response - 28. status(201).json(data) sends correct status and body", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => ctx.res.status(201).json({ created: true }));
+  app.get("/", (ctx: Context) => ctx.res.status(201).json({ created: true }));
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     assert.strictEqual(res.status, 201);
@@ -47,9 +48,9 @@ test("Response - 28. status(201).json(data) sends correct status and body", asyn
 
 test("Response - 29. redirect() sends 302 and Location header", async () => {
   const app = new Velo();
-  app.get("/old", (ctx: any) => ctx.res.redirect("/new"));
+  app.get("/old", (ctx: Context) => ctx.res.redirect("/new"));
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/old`, { redirect: "manual" });
     assert.strictEqual(res.status, 302);
@@ -61,12 +62,12 @@ test("Response - 29. redirect() sends 302 and Location header", async () => {
 
 test("Response - 30. cookie() sets Set-Cookie header with correct attributes", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => {
+  app.get("/", (ctx: Context) => {
     ctx.res.cookie("test", "val", { httpOnly: true, secure: true });
     ctx.res.send("ok");
   });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     const cookie = res.headers.get("set-cookie");
@@ -80,12 +81,12 @@ test("Response - 30. cookie() sets Set-Cookie header with correct attributes", a
 
 test("Response - 31. clearCookie() sets cookie with Max-Age=0", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => {
+  app.get("/", (ctx: Context) => {
     ctx.res.clearCookie("test");
     ctx.res.send("ok");
   });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     const cookie = res.headers.get("set-cookie");
@@ -96,21 +97,6 @@ test("Response - 31. clearCookie() sets cookie with Max-Age=0", async () => {
 });
 
 test("Response - 32. Calling send() after sent === true throws ResponseAlreadySentError", async () => {
-  const app = new Velo();
-  app.get("/", (ctx: any) => {
-    ctx.res.send("first");
-    try {
-      ctx.res.send("second");
-    } catch (e: any) {
-      // We can't easily catch this because it's in the handler, 
-      // but the server will catch it and log it or use onError.
-      // For the test, we'll check if it throws internally.
-      if (e.name === "ResponseAlreadySentError") {
-         (ctx.req.locals as any).threw = true;
-      }
-    }
-  });
-  // This test is tricky because of the way send() works.
   // Let's test the response object directly.
   const { Response } = await import("../src/response.js");
   const mockRes: any = { end: () => {}, setHeader: () => {}, getHeader: () => {} };
@@ -121,17 +107,34 @@ test("Response - 32. Calling send() after sent === true throws ResponseAlreadySe
 
 test("Response - 33. stream() pipes readable to response", async () => {
   const app = new Velo();
-  app.get("/", (ctx: any) => {
+  app.get("/", (ctx: Context) => {
     const s = new Readable();
     s.push("streamed content");
     s.push(null);
     ctx.res.stream(s);
   });
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/`);
     assert.strictEqual(await res.text(), "streamed content");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Response - Cookie injection escaping", async () => {
+  const app = new Velo();
+  app.get("/cookie", (ctx: Context) => {
+    ctx.res.cookie("session", "val; Domain=evil.com");
+    ctx.res.send("ok");
+  });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/cookie`);
+    const cookies = res.headers.getSetCookie();
+    assert.ok(cookies[0].startsWith("session=val%3B%20Domain%3Devil.com"));
   } finally {
     await app.close();
   }

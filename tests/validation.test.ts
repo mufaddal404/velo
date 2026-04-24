@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { v, validate } from "../src/validation.js";
 import { Velo } from "../src/server.js";
+import { type Context } from "../src/middleware.js";
 
 test("Validation - 53. Valid object passes all constraints, returns typed data", () => {
   const schema = v.object({
@@ -87,10 +88,10 @@ test("Validation - 62. validate() middleware returns 422 with structured errors 
   const app = new Velo();
   app.post("/test", validate({
     body: v.object({ name: v.string() })
-  }), (ctx: any) => ctx.res.send("ok"));
+  }), (ctx: Context) => ctx.res.send("ok"));
   
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/test`, {
       method: "POST",
@@ -111,13 +112,13 @@ test("Validation - 63. validate() attaches parsed data to ctx.req.locals.validat
   let validated: any = null;
   app.post("/test", validate({
     body: v.object({ name: v.string() })
-  }), (ctx: any) => {
+  }), (ctx: Context) => {
     validated = (ctx.req.locals as any).validated;
     ctx.res.send("ok");
   });
   
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     await fetch(`http://localhost:${port}/test`, {
       method: "POST",

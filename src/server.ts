@@ -14,6 +14,9 @@ export interface VeloOptions {
   trustProxy?: boolean;
   bodyLimit?: number;
   clock?: () => number;
+  headersTimeout?: number;
+  keepAliveTimeout?: number;
+  requestTimeout?: number;
   https?: {
     key: string | Buffer;
     cert: string | Buffer;
@@ -21,28 +24,38 @@ export interface VeloOptions {
   };
 }
 
-interface InternalHandlers extends Array<Middleware> {
-  scope?: Velo;
+interface RouteEntry {
+  handlers: Middleware[];
+  scope: Velo;
 }
 
 interface VeloInternalContext extends Context {
   _wsHandler?: WebSocketHandler;
 }
 
-export class Velo {
-  protected server?: HttpServer | HttpsServer;
-  protected router: Router;
-  protected wsRouter: Router;
-  protected middlewares: { prefix: string; fn: Middleware }[] = [];
-  protected _errorHandler?: ErrorHandler;
-  protected _notFoundHandler?: Handler;
+export class Velo<L = any> {
+  public server?: HttpServer | HttpsServer;
+  public router: Router<RouteEntry>;
+  public wsRouter: Router<RouteEntry>;
+  protected middlewares: { prefix: string; fn: Middleware<L> }[] = [];
+  protected _errorHandler?: ErrorHandler<L>;
+  protected _notFoundHandler?: Handler<L>;
   
-  protected parent: Velo | null = null;
+  protected parent: Velo<any> | null = null;
   protected basePath: string = "";
   protected connections = new Set<Socket | TLSSocket>();
   protected wsSockets = new WeakSet<Socket | TLSSocket>();
 
-  constructor(protected _options: VeloOptions = {}, parent: Velo | null = null, basePath: string = "") {
+  get address() {
+    return this.server?.address();
+  }
+
+  get port() {
+    const addr = this.address;
+    return addr && typeof addr === "object" ? addr.port : undefined;
+  }
+
+  constructor(protected _options: VeloOptions = {}, parent: Velo<any> | null = null, basePath: string = "") {
     this.parent = parent;
     this.basePath = basePath;
     
@@ -57,27 +70,27 @@ export class Velo {
       this.connections = parent.connections;
       this.wsSockets = parent.wsSockets;
     } else {
-      this.router = new Router();
-      this.wsRouter = new Router();
+      this.router = new Router<RouteEntry>();
+      this.wsRouter = new Router<RouteEntry>();
     }
   }
 
   // Helper to get effective handlers, traversing lineage if necessary
-  protected get errorHandler(): ErrorHandler {
+  protected get errorHandler(): ErrorHandler<L> {
     if (this._errorHandler) return this._errorHandler;
-    if (this.parent) return this.parent.errorHandler;
+    if (this.parent) return this.parent.errorHandler as ErrorHandler<L>;
     return this.defaultErrorHandler.bind(this);
   }
 
-  protected get notFoundHandler(): Handler {
+  protected get notFoundHandler(): Handler<L> {
     if (this._notFoundHandler) return this._notFoundHandler;
-    if (this.parent) return this.parent.notFoundHandler;
+    if (this.parent) return this.parent.notFoundHandler as Handler<L>;
     return () => { throw new NotFoundError(); };
   }
 
-  use(middleware: Middleware): this;
-  use(prefix: string, middleware: Middleware): this;
-  use(arg1: string | Middleware, arg2?: Middleware): this {
+  use(middleware: Middleware<L>): this;
+  use(prefix: string, middleware: Middleware<L>): this;
+  use(arg1: string | Middleware<L>, arg2?: Middleware<L>): this {
     if (typeof arg1 === "string") {
       this.middlewares.push({ prefix: this.basePath + arg1, fn: arg2! });
     } else {
@@ -86,20 +99,22 @@ export class Velo {
     return this;
   }
 
-  get(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("GET", path, handlers); return this; }
-  post(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("POST", path, handlers); return this; }
-  put(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("PUT", path, handlers); return this; }
-  patch(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("PATCH", path, handlers); return this; }
-  delete(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("DELETE", path, handlers); return this; }
-  options(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("OPTIONS", path, handlers); return this; }
-  head(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("HEAD", path, handlers); return this; }
-  all(path: string, ...handlers: (Handler | Middleware)[]) { this.addRoute("ALL", path, handlers); return this; }
+  get(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("GET", path, handlers); return this; }
+  post(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("POST", path, handlers); return this; }
+  put(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("PUT", path, handlers); return this; }
+  patch(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("PATCH", path, handlers); return this; }
+  delete(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("DELETE", path, handlers); return this; }
+  options(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("OPTIONS", path, handlers); return this; }
+  head(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("HEAD", path, handlers); return this; }
+  all(path: string, ...handlers: (Handler<L> | Middleware<L>)[]) { this.addRoute("ALL", path, handlers); return this; }
 
   ws(path: string, handler: WebSocketHandler) {
     const fullPath = this.basePath + path;
-    const internalHandlers: InternalHandlers = [this.wrapWebSocketHandler(handler)];
-    internalHandlers.scope = this;
-    this.wsRouter.add("GET", fullPath, internalHandlers);
+    const entry: RouteEntry = {
+      handlers: [this.wrapWebSocketHandler(handler)],
+      scope: this
+    };
+    this.wsRouter.add("GET", fullPath, entry);
     return this;
   }
 
@@ -111,26 +126,28 @@ export class Velo {
     };
   }
 
-  private addRoute(method: string, path: string, handlers: (Handler | Middleware)[]) {
+  private addRoute(method: string, path: string, handlers: (Handler<L> | Middleware<L>)[]) {
     const fullPath = this.basePath + path;
-    const wrappedHandlers = handlers.map(h => this.wrapHandler(h)) as InternalHandlers;
-    wrappedHandlers.scope = this;
-    this.router.add(method, fullPath, wrappedHandlers);
+    const entry: RouteEntry = {
+      handlers: handlers.map(h => this.wrapHandler(h)) as Middleware[],
+      scope: this
+    };
+    this.router.add(method, fullPath, entry);
   }
 
-  private wrapHandler(handler: Handler | Middleware): Middleware {
-    return (ctx, next) => (handler as Middleware)(ctx, next);
+  private wrapHandler(handler: Handler<L> | Middleware<L>): Middleware<L> {
+    return (ctx, next) => (handler as Middleware<L>)(ctx, next);
   }
 
-  group(prefix: string) {
-    return new Velo(this._options, this, this.basePath + prefix);
+  group(prefix: string): Velo<L> {
+    return new Velo<L>(this._options, this, this.basePath + prefix);
   }
 
-  onError(handler: ErrorHandler) {
+  onError(handler: ErrorHandler<L>) {
     this._errorHandler = handler;
   }
 
-  notFound(handler: Handler) {
+  notFound(handler: Handler<L>) {
     this._notFoundHandler = handler;
   }
 
@@ -141,6 +158,13 @@ export class Velo {
         root.server = createHttpsServer(root._options.https, (req, res) => root.handleRequest(req, res));
       } else {
         root.server = createHttpServer((req, res) => root.handleRequest(req, res));
+      }
+
+      if (root._options.headersTimeout) root.server.headersTimeout = root._options.headersTimeout;
+      if (root._options.keepAliveTimeout) root.server.keepAliveTimeout = root._options.keepAliveTimeout;
+      // requestTimeout is available from Node 14.11.0
+      if (root._options.requestTimeout && (root.server as any).requestTimeout !== undefined) {
+        (root.server as any).requestTimeout = root._options.requestTimeout;
       }
       
       root.server.on("connection", (socket: Socket) => {
@@ -195,16 +219,16 @@ export class Velo {
     });
   }
 
-  protected getRoot(): Velo {
-    let curr: Velo = this;
+  protected getRoot(): Velo<any> {
+    let curr: Velo<any> = this;
     while (curr.parent) curr = curr.parent;
     return curr;
   }
 
   protected async handleRequest(req: IncomingMessage, res: ServerResponse) {
-    const vReq = new Request(req, this._options);
+    const vReq = new Request<L>(req, this._options);
     const vRes = new Response(res, this._options);
-    const ctx: Context = { req: vReq, res: vRes };
+    const ctx: Context<L> = { req: vReq, res: vRes };
 
     try {
       await this._dispatch(ctx);
@@ -218,16 +242,15 @@ export class Velo {
     }
   }
 
-  protected async _dispatch(ctx: Context) {
+  protected async _dispatch(ctx: Context<L>) {
     const matchInfo = this.router.match(ctx.req.method, ctx.req.path);
-    const pipeline: Middleware[] = [];
+    const pipeline: Middleware<L>[] = [];
 
     if (matchInfo.result) {
-      const handlers = matchInfo.result.handlers as InternalHandlers;
-      const scope = handlers.scope || this;
+      const { handlers, scope } = matchInfo.result.handlers;
       
-      const lineage: Velo[] = [];
-      let curr: Velo | null = scope;
+      const lineage: Velo<any>[] = [];
+      let curr: Velo<any> | null = scope;
       while (curr) {
         lineage.unshift(curr);
         curr = curr.parent;
@@ -242,7 +265,7 @@ export class Velo {
       }
 
       ctx.req.params = { ...ctx.req.params, ...matchInfo.result.params };
-      pipeline.push(...handlers);
+      pipeline.push(...(handlers as Middleware<L>[]));
     } else if (matchInfo.methodNotAllowed) {
       pipeline.push(async () => { throw new MethodNotAllowedError(); });
     } else {
@@ -253,7 +276,7 @@ export class Velo {
   }
 
   protected async handleUpgrade(req: IncomingMessage, socket: Socket, head: Buffer) {
-    const vReq = new Request(req, this._options);
+    const vReq = new Request<L>(req, this._options);
     const matchInfo = this.wsRouter.match("GET", vReq.path);
 
     if (!matchInfo.result) {
@@ -261,17 +284,16 @@ export class Velo {
       return;
     }
 
-    const handlers = matchInfo.result.handlers as InternalHandlers;
-    const scope = handlers.scope || this;
+    const { handlers, scope } = matchInfo.result.handlers;
     
     vReq.params = { ...vReq.params, ...matchInfo.result.params };
 
     const vRes = new Response(null as unknown as ServerResponse, this._options);
-    const ctx: Context = { req: vReq, res: vRes };
+    const ctx: Context<L> = { req: vReq, res: vRes };
 
-    const pipeline: Middleware[] = [];
-    const lineage: Velo[] = [];
-    let curr: Velo | null = scope;
+    const pipeline: Middleware<L>[] = [];
+    const lineage: Velo<any>[] = [];
+    let curr: Velo<any> | null = scope;
     while (curr) {
       lineage.unshift(curr);
       curr = curr.parent;
@@ -287,11 +309,11 @@ export class Velo {
 
     let wsHandler: WebSocketHandler | undefined;
 
-    pipeline.push(...handlers);
+    pipeline.push(...(handlers as Middleware<L>[]));
     pipeline.push(async (c) => {
         wsHandler = (c as VeloInternalContext)._wsHandler;
         if (wsHandler) {
-            performWebSocketUpgrade(vReq, socket, head, wsHandler, this._options);
+            performWebSocketUpgrade(vReq as any, socket, head, wsHandler, this._options);
         }
     });
 
@@ -303,7 +325,7 @@ export class Velo {
     }
   }
 
-  protected async defaultErrorHandler(error: Error, ctx: Context) {
+  protected async defaultErrorHandler(error: Error, ctx: Context<L>) {
     if (ctx.res.sent) return;
 
     const status = error instanceof VeloError ? error.status : 500;
@@ -325,7 +347,7 @@ export class Velo {
 
   async register<T>(plugin: Plugin<T>, options?: T) {
     const scope = this.scope();
-    await plugin(scope, options as T);
+    await plugin(scope as any, options as T);
   }
 
   decorate(name: string, value: unknown) {

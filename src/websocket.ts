@@ -22,6 +22,7 @@ export interface WebSocketHandler {
 }
 
 const GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 export function handleUpgrade(req: VeloRequest, socket: Socket, head: Buffer, handler: WebSocketHandler, options: { bodyLimit?: number } = {}) {
   const key = req.header("sec-websocket-key");
@@ -72,6 +73,8 @@ export function handleUpgrade(req: VeloRequest, socket: Socket, head: Buffer, ha
 
 class VeloWebSocketImpl implements VeloWebSocket {
   private _readyState: "open" | "closing" | "closed" = "open";
+  private _closeCode = 1006; // Default to abnormal closure
+  private _closeReason = "";
   public locals: Record<string, unknown> = {};
   private buffer = Buffer.alloc(0);
   private fragmentedBuffer = Buffer.alloc(0);
@@ -86,8 +89,10 @@ class VeloWebSocketImpl implements VeloWebSocket {
 
   handleSocketClose(handler: WebSocketHandler) {
     if (this._readyState !== "closed") {
+      const code = this._readyState === "closing" ? this._closeCode : 1006;
+      const reason = this._readyState === "closing" ? this._closeReason : "";
       this._readyState = "closed";
-      handler.close(this, 1000, "");
+      handler.close(this, code, reason);
     }
   }
 
@@ -101,6 +106,8 @@ class VeloWebSocketImpl implements VeloWebSocket {
   close(code = 1000, reason = "") {
     if (this._readyState !== "open") return;
     this._readyState = "closing";
+    this._closeCode = code;
+    this._closeReason = reason;
     const payload = Buffer.alloc(2 + Buffer.byteLength(reason));
     payload.writeUInt16BE(code, 0);
     payload.write(reason, 2);
@@ -206,6 +213,8 @@ class VeloWebSocketImpl implements VeloWebSocket {
           this.socket.destroy();
         } else {
           this._readyState = "closed";
+          this._closeCode = code;
+          this._closeReason = reason;
           const echoPayload = Buffer.alloc(2);
           echoPayload.writeUInt16BE(code, 0);
           this.sendFrame(0x08, echoPayload);
@@ -245,7 +254,12 @@ class VeloWebSocketImpl implements VeloWebSocket {
 
   private deliverMessage(opcode: number, payload: Buffer, handler: WebSocketHandler) {
     if (opcode === 0x01) {
-      handler.message(this, payload.toString("utf8"));
+      try {
+        handler.message(this, utf8Decoder.decode(payload));
+      } catch (e) {
+        this.close(1007, "Invalid UTF-8");
+        this.socket.destroy();
+      }
     } else {
       handler.message(this, payload);
     }

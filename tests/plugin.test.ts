@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { Velo } from "../src/server.js";
+import { type Context, type NextFunction } from "../src/middleware.js";
 
 test("Plugin - 64. Plugin receives app instance and options", async () => {
   const app = new Velo();
@@ -15,11 +16,11 @@ test("Plugin - 64. Plugin receives app instance and options", async () => {
 test("Plugin - 65. Plugin can register routes that are reachable", async () => {
   const app = new Velo();
   const plugin = (instance: Velo) => {
-    instance.get("/plugin-route", (ctx: any) => ctx.res.send("from plugin"));
+    instance.get("/plugin-route", (ctx: Context) => ctx.res.send("from plugin"));
   };
   await app.register(plugin);
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     const res = await fetch(`http://localhost:${port}/plugin-route`);
     assert.strictEqual(await res.text(), "from plugin");
@@ -32,15 +33,15 @@ test("Plugin - 66. Plugin can register middleware that runs for its routes", asy
   const app = new Velo();
   let mwCalled = false;
   const plugin = (instance: Velo) => {
-    instance.use((ctx, next) => {
+    instance.use((ctx: Context, next: NextFunction) => {
       mwCalled = true;
       return next();
     });
-    instance.get("/plugin-route", (ctx: any) => ctx.res.send("ok"));
+    instance.get("/plugin-route", (ctx: Context) => ctx.res.send("ok"));
   };
   await app.register(plugin);
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     await fetch(`http://localhost:${port}/plugin-route`);
     assert.strictEqual(mwCalled, true);
@@ -54,15 +55,15 @@ test("Plugin - 67. Scoped plugin middleware does not run for routes outside the 
   let mwCalled = 0;
   
   // Outer route
-  app.get("/outer", (ctx: any) => ctx.res.send("outer"));
+  app.get("/outer", (ctx: Context) => ctx.res.send("outer"));
   
   // Inner scope
   const plugin = (instance: Velo) => {
-     instance.use((ctx, next) => {
+     instance.use((ctx: Context, next: NextFunction) => {
        mwCalled++;
        return next();
      });
-     instance.get("/inner", (ctx: any) => ctx.res.send("inner"));
+     instance.get("/inner", (ctx: Context) => ctx.res.send("inner"));
   };
   
   // Actually the current implementation of scope() just returns 'this',
@@ -74,7 +75,7 @@ test("Plugin - 67. Scoped plugin middleware does not run for routes outside the 
   await app.register(plugin);
   
   await app.listen(0);
-  const port = (app as any).server.address().port;
+  const port = app.port;
   try {
     await fetch(`http://localhost:${port}/outer`);
     // If it leaks, mwCalled will be 1

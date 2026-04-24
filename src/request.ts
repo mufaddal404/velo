@@ -3,7 +3,7 @@ import { TLSSocket } from "node:tls";
 import { parse as parseQuery } from "node:querystring";
 import { BadRequestError, PayloadTooLargeError, BodyAlreadyConsumedError } from "./errors.js";
 
-export interface VeloRequest {
+export interface VeloRequest<L = any> {
   raw: IncomingMessage;
   method: string;
   path: string;
@@ -20,12 +20,12 @@ export interface VeloRequest {
   secure: boolean;
   xhr: boolean;
   cookies: Record<string, string>;
-  locals: Record<string, unknown>;
+  locals: L;
 }
 
-export class Request implements VeloRequest {
+export class Request<L = any> implements VeloRequest<L> {
   public params: Record<string, string> = {};
-  public locals: Record<string, unknown> = {};
+  public locals: L = {} as L;
   private _body: Buffer | null = null;
   private _bodyConsumed = false;
 
@@ -105,10 +105,9 @@ export class Request implements VeloRequest {
     if (this.options.trustProxy) {
       const forwarded = this.header("x-forwarded-for");
       if (forwarded) {
-        // Take the rightmost IP in X-Forwarded-For if we trust the proxy.
-        // This is safer than taking the first one which can be spoofed by the client.
+        // Take the leftmost IP in X-Forwarded-For if we trust the proxy.
         const ips = forwarded.split(",").map(ip => ip.trim());
-        return ips[ips.length - 1];
+        return ips[0];
       }
     }
     return this.raw.socket.remoteAddress || "";

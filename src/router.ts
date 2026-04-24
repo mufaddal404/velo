@@ -1,33 +1,33 @@
 import { type Middleware } from "./middleware.js";
 
-interface RouteResult {
-  handlers: Middleware[];
+interface RouteResult<T> {
+  handlers: T;
   params: Record<string, string>;
 }
 
-class Node {
+class Node<T> {
   path: string;
-  children: Node[] = [];
+  children: Node<T>[] = [];
   indices: string = "";
-  paramChild?: Node;
+  paramChild?: Node<T>;
   paramName?: string;
-  wildcardHandlers = new Map<string, Middleware[]>();
-  handlers = new Map<string, Middleware[]>();
+  wildcardHandlers = new Map<string, T>();
+  handlers = new Map<string, T>();
 
   constructor(path: string = "") {
     this.path = path;
   }
 }
 
-export class Router {
-  private root = new Node();
+export class Router<T = any> {
+  private root = new Node<T>();
 
-  add(method: string, path: string, handlers: Middleware[]) {
+  add(method: string, path: string, handlers: T) {
     const methodUpper = method.toUpperCase();
     this._add(this.root, path, methodUpper, handlers);
   }
 
-  private _add(node: Node, path: string, method: string, handlers: Middleware[]) {
+  private _add(node: Node<T>, path: string, method: string, handlers: T) {
     if (path === "") {
       node.handlers.set(method, handlers);
       return;
@@ -42,7 +42,7 @@ export class Router {
           throw new Error(`Route conflict: parameter name mismatch. Expected ":${node.paramName}" but got ":${paramName}" at "${path}"`);
         }
       } else {
-        node.paramChild = new Node();
+        node.paramChild = new Node<T>();
         node.paramName = paramName;
       }
       this._add(node.paramChild, path.slice(end), method, handlers);
@@ -61,7 +61,7 @@ export class Router {
       if (cpLen > 0) {
         if (cpLen < child.path.length) {
           // Split child
-          const newNode = new Node(child.path.slice(cpLen));
+          const newNode = new Node<T>(child.path.slice(cpLen));
           newNode.children = child.children;
           newNode.indices = child.indices;
           newNode.paramChild = child.paramChild;
@@ -85,7 +85,7 @@ export class Router {
     // No common prefix with any child, create new static child
     let end = path.search(/[:*]/);
     if (end === -1) end = path.length;
-    const newNode = new Node(path.slice(0, end));
+    const newNode = new Node<T>(path.slice(0, end));
     node.children.push(newNode);
     node.indices += newNode.path[0];
     this._add(newNode, path.slice(end), method, handlers);
@@ -100,12 +100,12 @@ export class Router {
     return len;
   }
 
-  match(method: string, path: string): { result: RouteResult | null; methodNotAllowed: boolean } {
+  match(method: string, path: string): { result: RouteResult<T> | null; methodNotAllowed: boolean } {
     const methodUpper = method.toUpperCase();
     let methodMatched = false;
-    let finalResult: RouteResult | null = null;
+    let finalResult: RouteResult<T> | null = null;
 
-    const search = (node: Node, currentPath: string, params: Record<string, string>): boolean => {
+    const search = (node: Node<T>, currentPath: string, params: Record<string, string>): boolean => {
       if (!currentPath.startsWith(node.path)) return false;
 
       const remaining = currentPath.slice(node.path.length);
