@@ -25,6 +25,10 @@ interface InternalHandlers extends Array<Middleware> {
   scope?: Velo;
 }
 
+interface VeloInternalContext extends Context {
+  _wsHandler?: WebSocketHandler;
+}
+
 export class Velo {
   protected server?: HttpServer | HttpsServer;
   protected router: Router;
@@ -102,7 +106,7 @@ export class Velo {
   private wrapWebSocketHandler(handler: WebSocketHandler): Middleware {
     return async (ctx, next) => {
       // This is a marker for handleUpgrade to find the handler
-      (ctx as any)._wsHandler = handler;
+      (ctx as VeloInternalContext)._wsHandler = handler;
       await next();
     };
   }
@@ -285,7 +289,7 @@ export class Velo {
 
     pipeline.push(...handlers);
     pipeline.push(async (c) => {
-        wsHandler = (c as any)._wsHandler;
+        wsHandler = (c as VeloInternalContext)._wsHandler;
         if (wsHandler) {
             performWebSocketUpgrade(vReq, socket, head, wsHandler, this._options);
         }
@@ -325,6 +329,9 @@ export class Velo {
   }
 
   decorate(name: string, value: unknown) {
+    if (name in this) {
+      throw new Error(`The decoration '${name}' already exists or is a reserved word.`);
+    }
     Object.defineProperty(this, name, {
       value,
       writable: true,

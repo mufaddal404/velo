@@ -3,6 +3,7 @@ import { type VeloRequest } from "./request.js";
 import { type Context } from "./middleware.js";
 import { Response } from "./response.js";
 import { type Socket } from "node:net";
+import { type ServerResponse } from "node:http";
 
 export interface VeloWebSocket {
   send(data: string | Buffer): void;
@@ -44,7 +45,7 @@ export function handleUpgrade(req: VeloRequest, socket: Socket, head: Buffer, ha
 
   const ws = new VeloWebSocketImpl(socket, req.params, options.bodyLimit);
   // Create a minimal response that doesn't cause crashes but throws if used improperly
-  const vRes = new Response(null as unknown as any, options);
+  const vRes = new Response(null as unknown as ServerResponse, options);
   const ctx: Context = { req, res: vRes };
 
   handler.open(ws, ctx);

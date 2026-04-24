@@ -13,11 +13,11 @@ export type ValidationResult<T> =
 
 abstract class BaseSchema<T> {
   protected _optional = false;
-  protected _rules: ((val: unknown, path: string) => ValidationError | null)[] = [];
+  protected _rules: ((val: T, path: string) => ValidationError | null)[] = [];
 
   optional(): BaseSchema<T | undefined> {
     this._optional = true;
-    return this as BaseSchema<T | undefined>;
+    return this as unknown as BaseSchema<T | undefined>;
   }
 
   protected abstract _typeCheck(val: unknown, path: string): ValidationError | null;
@@ -31,14 +31,15 @@ abstract class BaseSchema<T> {
     const typeError = this._typeCheck(val, path);
     if (typeError) return { success: false, errors: [typeError] };
 
+    const typedVal = val as T;
     const errors: ValidationError[] = [];
     for (const rule of this._rules) {
-      const err = rule(val, path);
+      const err = rule(typedVal, path);
       if (err) errors.push(err);
     }
 
     if (errors.length > 0) return { success: false, errors };
-    return { success: true, data: val as T };
+    return { success: true, data: typedVal };
   }
 }
 
@@ -49,30 +50,30 @@ class StringSchema extends BaseSchema<string> {
   }
 
   minLength(n: number) {
-    this._rules.push((val, path) => ((val as string).length < n ? { path, message: `must be at least ${n} characters`, value: val } : null));
+    this._rules.push((val, path) => (val.length < n ? { path, message: `must be at least ${n} characters`, value: val } : null));
     return this;
   }
 
   maxLength(n: number) {
-    this._rules.push((val, path) => ((val as string).length > n ? { path, message: `must be at most ${n} characters`, value: val } : null));
+    this._rules.push((val, path) => (val.length > n ? { path, message: `must be at most ${n} characters`, value: val } : null));
     return this;
   }
 
   length(n: number) {
-    this._rules.push((val, path) => ((val as string).length !== n ? { path, message: `must be exactly ${n} characters`, value: val } : null));
+    this._rules.push((val, path) => (val.length !== n ? { path, message: `must be exactly ${n} characters`, value: val } : null));
     return this;
   }
 
   email() {
     const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    this._rules.push((val, path) => (!regex.test(val as string) ? { path, message: "must be a valid email address", value: val } : null));
+    this._rules.push((val, path) => (!regex.test(val) ? { path, message: "must be a valid email address", value: val } : null));
     return this;
   }
 
   url() {
     this._rules.push((val, path) => {
       try {
-        new URL(val as string);
+        new URL(val);
         return null;
       } catch (e) {
         return { path, message: "must be a valid URL", value: val };
@@ -82,7 +83,7 @@ class StringSchema extends BaseSchema<string> {
   }
 
   pattern(regex: RegExp) {
-    this._rules.push((val, path) => (!regex.test(val as string) ? { path, message: "must match pattern", value: val } : null));
+    this._rules.push((val, path) => (!regex.test(val) ? { path, message: "must match pattern", value: val } : null));
     return this;
   }
 }
@@ -94,22 +95,22 @@ class NumberSchema extends BaseSchema<number> {
   }
 
   min(n: number) {
-    this._rules.push((val, path) => ((val as number) < n ? { path, message: `must be at least ${n}`, value: val } : null));
+    this._rules.push((val, path) => (val < n ? { path, message: `must be at least ${n}`, value: val } : null));
     return this;
   }
 
   max(n: number) {
-    this._rules.push((val, path) => ((val as number) > n ? { path, message: `must be at most ${n}`, value: val } : null));
+    this._rules.push((val, path) => (val > n ? { path, message: `must be at most ${n}`, value: val } : null));
     return this;
   }
 
   integer() {
-    this._rules.push((val, path) => (!Number.isInteger(val as number) ? { path, message: "must be an integer", value: val } : null));
+    this._rules.push((val, path) => (!Number.isInteger(val) ? { path, message: "must be an integer", value: val } : null));
     return this;
   }
 
   positive() {
-    this._rules.push((val, path) => ((val as number) <= 0 ? { path, message: "must be positive", value: val } : null));
+    this._rules.push((val, path) => (val <= 0 ? { path, message: "must be positive", value: val } : null));
     return this;
   }
 }
@@ -132,12 +133,12 @@ class ArraySchema<T> extends BaseSchema<T[]> {
   }
 
   minItems(n: number) {
-    this._rules.push((val, path) => ((val as T[]).length < n ? { path, message: `must have at least ${n} items`, value: val } : null));
+    this._rules.push((val, path) => (val.length < n ? { path, message: `must have at least ${n} items`, value: val } : null));
     return this;
   }
 
   maxItems(n: number) {
-    this._rules.push((val, path) => ((val as T[]).length > n ? { path, message: `must have at most ${n} items`, value: val } : null));
+    this._rules.push((val, path) => (val.length > n ? { path, message: `must have at most ${n} items`, value: val } : null));
     return this;
   }
 
@@ -165,7 +166,7 @@ class ArraySchema<T> extends BaseSchema<T[]> {
 
 type Unwrap<T> = T extends BaseSchema<infer U> ? U : never;
 
-type ObjectShape = Record<string, BaseSchema<unknown>>;
+type ObjectShape = Record<string, BaseSchema<any>>;
 
 type ObjectOutput<T extends ObjectShape> = {
   [K in keyof T as undefined extends Unwrap<T[K]> ? never : K]: Unwrap<T[K]>;
@@ -226,7 +227,7 @@ export const v = {
   enum: <T>(values: T[]) => new EnumSchema(values),
 };
 
-export function validate(schemas: { body?: BaseSchema<unknown>; query?: BaseSchema<unknown>; params?: BaseSchema<unknown> }): Middleware {
+export function validate(schemas: { body?: BaseSchema<any>; query?: BaseSchema<any>; params?: BaseSchema<any> }): Middleware {
   return async (ctx, next) => {
     const errors: ValidationError[] = [];
     const validated: Record<string, unknown> = {};
