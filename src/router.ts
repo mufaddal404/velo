@@ -1,4 +1,4 @@
-type Handler = any; // Will be defined in middleware.ts
+import { type Handler } from "./middleware.js";
 
 interface RouteResult {
   handlers: Handler[];
@@ -6,95 +6,152 @@ interface RouteResult {
 }
 
 class Node {
-  static = new Map<string, Node>();
-  param?: Node;
-  wildcard?: Handler[];
-  handlers = new Map<string, Handler[]>();
+  path: string;
+  children: Node[] = [];
+  indices: string = "";
+  paramChild?: Node;
   paramName?: string;
-  hasWildcard = false;
+  wildcardHandlers = new Map<string, Handler[]>();
+  handlers = new Map<string, Handler[]>();
+
+  constructor(path: string = "") {
+    this.path = path;
+  }
 }
 
 export class Router {
   private root = new Node();
 
   add(method: string, path: string, handlers: Handler[]) {
-    const segments = path.split("/").filter(Boolean);
-    let current = this.root;
+    const methodUpper = method.toUpperCase();
+    this._add(this.root, path, methodUpper, handlers);
+  }
 
-    for (const segment of segments) {
-      if (segment.startsWith(":")) {
-        if (!current.param) current.param = new Node();
-        current = current.param;
-        current.paramName = segment.slice(1);
-      } else if (segment === "*") {
-        current.wildcard = handlers;
-        current.hasWildcard = true;
-        break;
-      } else {
-        if (!current.static.has(segment)) {
-          current.static.set(segment, new Node());
+  private _add(node: Node, path: string, method: string, handlers: Handler[]) {
+    if (path === "") {
+      node.handlers.set(method, handlers);
+      return;
+    }
+
+    if (path.startsWith(":")) {
+      let end = path.indexOf("/");
+      if (end === -1) end = path.length;
+      const paramName = path.slice(1, end);
+      if (!node.paramChild) {
+        node.paramChild = new Node();
+        node.paramName = paramName;
+      }
+      this._add(node.paramChild, path.slice(end), method, handlers);
+      return;
+    }
+
+    if (path.startsWith("*")) {
+      node.wildcardHandlers.set(method, handlers);
+      return;
+    }
+
+    // Static
+    for (let i = 0; i < node.children.length; i++) {
+      const child = node.children[i];
+      const cpLen = this._getCommonPrefixLen(child.path, path);
+      if (cpLen > 0) {
+        if (cpLen < child.path.length) {
+          // Split child
+          const newNode = new Node(child.path.slice(cpLen));
+          newNode.children = child.children;
+          newNode.indices = child.indices;
+          newNode.paramChild = child.paramChild;
+          newNode.paramName = child.paramName;
+          newNode.handlers = new Map(child.handlers);
+          newNode.wildcardHandlers = new Map(child.wildcardHandlers);
+
+          child.path = child.path.slice(0, cpLen);
+          child.children = [newNode];
+          child.indices = newNode.path[0];
+          child.paramChild = undefined;
+          child.paramName = undefined;
+          child.handlers = new Map();
+          child.wildcardHandlers = new Map();
         }
-        current = current.static.get(segment)!;
+        this._add(child, path.slice(cpLen), method, handlers);
+        return;
       }
     }
 
-    if (!path.endsWith("*")) {
-      current.handlers.set(method.toUpperCase(), handlers);
+    // No common prefix with any child, create new static child
+    let end = path.search(/[:*]/);
+    if (end === -1) end = path.length;
+    const newNode = new Node(path.slice(0, end));
+    node.children.push(newNode);
+    node.indices += newNode.path[0];
+    this._add(newNode, path.slice(end), method, handlers);
+  }
+
+  private _getCommonPrefixLen(a: string, b: string): number {
+    let len = 0;
+    const max = Math.min(a.length, b.length);
+    while (len < max && a[len] === b[len]) {
+      len++;
     }
+    return len;
   }
 
   match(method: string, path: string): { result: RouteResult | null; methodNotAllowed: boolean } {
-    const segments = path.split("/").filter(Boolean);
-    const params: Record<string, string> = {};
-    
-    // First, find any node that matches the path regardless of method
-    const nodes = this._findAllNodes(this.root, segments, 0, params);
-    
-    if (nodes.length === 0) {
-      return { result: null, methodNotAllowed: false };
-    }
-
     const methodUpper = method.toUpperCase();
-    for (const { node, params: matchParams } of nodes) {
-      const handlers = node.handlers.get(methodUpper) || node.handlers.get("ALL") || (node.wildcard && node.hasWildcard ? node.wildcard : null);
-      if (handlers) {
-        return { result: { handlers, params: matchParams }, methodNotAllowed: false };
+    let methodMatched = false;
+    let finalResult: RouteResult | null = null;
+
+    const search = (node: Node, currentPath: string, params: Record<string, string>): boolean => {
+      if (!currentPath.startsWith(node.path)) return false;
+
+      const remaining = currentPath.slice(node.path.length);
+
+      if (remaining === "") {
+        const h = node.handlers.get(methodUpper) || node.handlers.get("ALL");
+        if (h) {
+          finalResult = { handlers: h, params: { ...params } };
+          return true;
+        }
+        if (node.handlers.size > 0 || node.handlers.has("ALL")) methodMatched = true;
+
+        const wh = node.wildcardHandlers.get(methodUpper) || node.wildcardHandlers.get("ALL");
+        if (wh) {
+          finalResult = { handlers: wh, params: { ...params, "*": "" } };
+          return true;
+        }
+        if (node.wildcardHandlers.size > 0 || node.wildcardHandlers.has("ALL")) methodMatched = true;
+
+        return false;
       }
-    }
 
-    return { result: null, methodNotAllowed: true };
-  }
+      // Check wildcard match (matches anything remaining)
+      const wh = node.wildcardHandlers.get(methodUpper) || node.wildcardHandlers.get("ALL");
+      if (wh) {
+        finalResult = { handlers: wh, params: { ...params, "*": remaining } };
+      }
+      if (node.wildcardHandlers.size > 0 || node.wildcardHandlers.has("ALL")) methodMatched = true;
 
-  private _findAllNodes(
-    node: Node,
-    segments: string[],
-    index: number,
-    params: Record<string, string>
-  ): { node: Node; params: Record<string, string> }[] {
-    if (index === segments.length) {
-      return [{ node, params: { ...params } }];
-    }
+      // Try static children
+      const char = remaining[0];
+      for (const child of node.children) {
+        if (child.path[0] === char) {
+          if (search(child, remaining, params)) return true;
+        }
+      }
 
-    const segment = segments[index];
-    const matches: { node: Node; params: Record<string, string> }[] = [];
+      // Try param child
+      if (node.paramChild) {
+        let end = remaining.indexOf("/");
+        if (end === -1) end = remaining.length;
+        const val = remaining.slice(0, end);
+        if (search(node.paramChild, remaining.slice(end), { ...params, [node.paramName!]: val })) return true;
+      }
 
-    // 1. Static match
-    const staticNode = node.static.get(segment);
-    if (staticNode) {
-      matches.push(...this._findAllNodes(staticNode, segments, index + 1, params));
-    }
+      return !!finalResult && finalResult.params["*"] !== undefined;
+    };
 
-    // 2. Param match
-    if (node.param) {
-      const nextParams = { ...params, [node.param.paramName!]: segment };
-      matches.push(...this._findAllNodes(node.param, segments, index + 1, nextParams));
-    }
+    search(this.root, path, {});
 
-    // 3. Wildcard match (it's terminal and matches everything else)
-    if (node.wildcard) {
-      matches.push({ node, params: { ...params, "*": segments.slice(index).join("/") } });
-    }
-
-    return matches;
+    return { result: finalResult, methodNotAllowed: !finalResult && methodMatched };
   }
 }

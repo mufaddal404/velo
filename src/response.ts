@@ -1,6 +1,7 @@
 import { ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { ResponseAlreadySentError } from "./errors.js";
+import { type VeloOptions } from "./server.js";
 
 export interface CookieOptions {
   maxAge?: number;
@@ -33,29 +34,34 @@ export interface VeloResponse {
 export class Response implements VeloResponse {
   public sent = false;
 
-  constructor(public raw: ServerResponse) {}
+  constructor(public raw: ServerResponse, private options: VeloOptions = {}) {
+    if (this.raw && this.options.clock) {
+        this.set("Date", new Date(this.options.clock()).toUTCString());
+    }
+  }
 
   status(code: number): this {
-    this.raw.statusCode = code;
+    if (this.raw) this.raw.statusCode = code;
     return this;
   }
 
   getStatus(): number {
-    return this.raw.statusCode;
+    return this.raw ? this.raw.statusCode : 0;
   }
 
   set(name: string, value: string): this {
-    this.raw.setHeader(name, value);
+    if (this.raw) this.raw.setHeader(name, value);
     return this;
   }
 
   get(name: string): string | undefined {
+    if (!this.raw) return undefined;
     const val = this.raw.getHeader(name);
     return typeof val === "string" ? val : undefined;
   }
 
   remove(name: string): this {
-    this.raw.removeHeader(name);
+    if (this.raw) this.raw.removeHeader(name);
     return this;
   }
 
@@ -67,6 +73,8 @@ export class Response implements VeloResponse {
   send(body?: string | Buffer | object): void {
     if (this.sent) throw new ResponseAlreadySentError();
     this.sent = true;
+
+    if (!this.raw) return;
 
     if (body === undefined || body === null) {
       this.raw.end();
@@ -113,19 +121,27 @@ export class Response implements VeloResponse {
   stream(readable: Readable): void {
     if (this.sent) throw new ResponseAlreadySentError();
     this.sent = true;
-    readable.pipe(this.raw);
+    if (this.raw) readable.pipe(this.raw);
   }
 
   cookie(name: string, value: string, options: CookieOptions = {}): this {
     let str = `${name}=${value}`;
 
-    if (options.maxAge !== undefined) str += `; Max-Age=${options.maxAge}`;
+    if (options.maxAge !== undefined) {
+        str += `; Max-Age=${options.maxAge}`;
+        if (!options.expires && this.options.clock) {
+            const expires = new Date(this.options.clock() + options.maxAge * 1000);
+            str += `; Expires=${expires.toUTCString()}`;
+        }
+    }
     if (options.expires) str += `; Expires=${options.expires.toUTCString()}`;
     if (options.httpOnly) str += "; HttpOnly";
     if (options.secure) str += "; Secure";
     if (options.sameSite) str += `; SameSite=${options.sameSite}`;
     if (options.path) str += `; Path=${options.path}`;
     if (options.domain) str += `; Domain=${options.domain}`;
+
+    if (!this.raw) return this;
 
     const existing = this.raw.getHeader("Set-Cookie");
     if (!existing) {

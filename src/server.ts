@@ -1,4 +1,5 @@
-import { createServer, Server, IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createHttpServer, Server as HttpServer, IncomingMessage, ServerResponse } from "node:http";
+import { createServer as createHttpsServer, Server as HttpsServer } from "node:https";
 import { Request } from "./request.js";
 import { Response } from "./response.js";
 import { Router } from "./router.js";
@@ -11,10 +12,15 @@ export interface VeloOptions {
   trustProxy?: boolean;
   bodyLimit?: number;
   clock?: () => number;
+  https?: {
+    key: string | Buffer;
+    cert: string | Buffer;
+    [key: string]: any;
+  };
 }
 
 export class Velo {
-  protected server?: Server;
+  protected server?: HttpServer | HttpsServer;
   protected router: Router;
   protected wsRouter: Router;
   protected middlewares: { prefix: string; fn: Middleware }[] = [];
@@ -102,8 +108,17 @@ export class Velo {
   async listen(port: number, hostname: string = "127.0.0.1"): Promise<void> {
     const root = this.getRoot();
     if (!root.server) {
-      root.server = createServer(root.handleRequest.bind(root));
+      if (root._options.https) {
+        root.server = createHttpsServer(root._options.https, root.handleRequest.bind(root));
+      } else {
+        root.server = createHttpServer(root.handleRequest.bind(root));
+      }
+      
       root.server.on("connection", (socket) => {
+        root.connections.add(socket);
+        socket.on("close", () => root.connections.delete(socket));
+      });
+      root.server.on("secureConnection", (socket) => {
         root.connections.add(socket);
         socket.on("close", () => root.connections.delete(socket));
       });
@@ -149,7 +164,7 @@ export class Velo {
 
   protected async handleRequest(req: IncomingMessage, res: ServerResponse) {
     const vReq = new Request(req, this._options);
-    const vRes = new Response(res);
+    const vRes = new Response(res, this._options);
     const ctx: Context = { req: vReq, res: vRes };
 
     try {
@@ -198,7 +213,7 @@ export class Velo {
     await compose(pipeline, ctx);
   }
 
-  protected handleUpgrade(req: IncomingMessage, socket: any, head: Buffer) {
+  protected async handleUpgrade(req: IncomingMessage, socket: any, head: Buffer) {
     const vReq = new Request(req, this._options);
     const matchInfo = this.wsRouter.match("GET", vReq.path);
 
@@ -210,10 +225,40 @@ export class Velo {
     const handlers: any = matchInfo.result.handlers;
     const scope = handlers.scope as Velo;
     
-    vReq.params = matchInfo.result.params;
-    const handler = handlers[0] as WebSocketHandler;
-    
-    performWebSocketUpgrade(vReq, socket, head, handler);
+    vReq.params = { ...vReq.params, ...matchInfo.result.params };
+    const wsHandler = handlers[0] as WebSocketHandler;
+
+    // Create a dummy response for middlewares that might want to use it (e.g. status)
+    // However, if they call send(), we should probably fail the upgrade.
+    const vRes = new Response(null as any, this._options);
+    const ctx: Context = { req: vReq, res: vRes };
+
+    const pipeline: Middleware[] = [];
+    const lineage: Velo[] = [];
+    let curr: Velo | null = scope;
+    while (curr) {
+      lineage.unshift(curr);
+      curr = curr.parent;
+    }
+
+    for (const s of lineage) {
+      for (const mw of s.middlewares) {
+        if (vReq.path.startsWith(mw.prefix)) {
+          pipeline.push(mw.fn);
+        }
+      }
+    }
+
+    pipeline.push(async (c, next) => {
+        performWebSocketUpgrade(vReq, socket, head, wsHandler);
+    });
+
+    try {
+        await compose(pipeline, ctx);
+    } catch (err: any) {
+        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+        socket.destroy();
+    }
   }
 
   protected async defaultErrorHandler(error: Error, ctx: Context) {
@@ -231,7 +276,12 @@ export class Velo {
       body.fields = error.fields;
     }
 
-    ctx.res.status(status).json(body);
+    if (ctx.res.raw) {
+        ctx.res.status(status).json(body);
+    } else {
+        // This might happen during WebSocket upgrade if middleware fails
+        // We already handled it in handleUpgrade but just in case
+    }
   }
 
   async register<T>(plugin: Plugin<T>, options?: T) {
