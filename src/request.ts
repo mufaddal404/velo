@@ -1,4 +1,4 @@
-import { IncomingMessage } from "node:http";
+import { IncomingMessage, IncomingHttpHeaders } from "node:http";
 import { TLSSocket } from "node:tls";
 import { parse as parseQuery, type ParsedUrlQuery } from "node:querystring";
 import { BadRequestError, PayloadTooLargeError, BodyAlreadyConsumedError } from "./errors.js";
@@ -9,7 +9,7 @@ export interface VeloRequest<L extends Record<string, unknown> = Record<string, 
   path: string;
   params: Record<string, string>;
   query: ParsedUrlQuery;
-  headers: Record<string, string | string[]>;
+  headers: IncomingHttpHeaders;
   header(name: string): string | undefined;
   json<T = unknown>(): Promise<T>;
   text(): Promise<string>;
@@ -49,8 +49,8 @@ export class Request<L extends Record<string, unknown> = Record<string, unknown>
     return parseQuery(queryString);
   }
 
-  get headers() {
-    return this.raw.headers as Record<string, string | string[]>;
+  get headers(): IncomingHttpHeaders {
+    return this.raw.headers;
   }
 
   header(name: string): string | undefined {

@@ -15,6 +15,10 @@ export type Middleware<L extends Record<string, unknown> = Record<string, unknow
 
 export type Handler<L extends Record<string, unknown> = Record<string, unknown>> = (ctx: Context<L>) => void | Promise<void>;
 
+export type VeloHandler<L extends Record<string, unknown> = Record<string, unknown>> =
+  | Handler<L>
+  | Middleware<L>;
+
 export type ErrorHandler<L extends Record<string, unknown> = Record<string, unknown>> = (
   error: Error,
   ctx: Context<L>

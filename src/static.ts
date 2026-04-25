@@ -166,18 +166,24 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
         const out = new PassThrough();
         ctx.res.stream(out);
         
+        const write = async (chunk: any) => {
+          if (!out.write(chunk)) {
+            await new Promise((resolve) => out.once("drain", resolve));
+          }
+        };
+
         (async () => {
           try {
             for (const { start, end } of ranges) {
-              out.write(`--${boundary}\r\n`);
-              out.write(`Content-Type: ${contentType}\r\n`);
-              out.write(`Content-Range: bytes ${start}-${end}/${stats.size}\r\n\r\n`);
+              await write(`--${boundary}\r\n`);
+              await write(`Content-Type: ${contentType}\r\n`);
+              await write(`Content-Range: bytes ${start}-${end}/${stats.size}\r\n\r\n`);
               
               const stream = createReadStream(targetFile, { start, end });
               for await (const chunk of stream) {
-                out.write(chunk);
+                await write(chunk);
               }
-              out.write("\r\n");
+              await write("\r\n");
             }
             out.end(`--${boundary}--\r\n`);
           } catch (err) {

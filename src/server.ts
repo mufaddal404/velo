@@ -5,7 +5,7 @@ import { TLSSocket } from "node:tls";
 import { Request } from "./request.js";
 import { Response } from "./response.js";
 import { Router } from "./router.js";
-import { type Middleware, type Handler, type ErrorHandler, compose, type Context } from "./middleware.js";
+import { type Middleware, type Handler, type ErrorHandler, compose, type Context, type VeloHandler } from "./middleware.js";
 import { InternalServerError, NotFoundError, VeloError, MethodNotAllowedError, UnprocessableEntityError } from "./errors.js";
 import { type Plugin } from "./plugin.js";
 import { type WebSocketHandler, handleUpgrade as performWebSocketUpgrade } from "./websocket.js";
@@ -29,9 +29,7 @@ interface RouteEntry<L extends Record<string, unknown>> {
   scope: Velo<L>;
 }
 
-interface VeloInternalContext<L extends Record<string, unknown>> extends Context<L> {
-  _wsHandler?: WebSocketHandler;
-}
+const wsHandlers = new WeakMap<Context<any>, WebSocketHandler>();
 
 export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
   public server?: HttpServer | HttpsServer;
@@ -75,31 +73,25 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
     }
   }
 
-  protected getLineage(from: Velo<L> = this): Velo<L>[] {
-    const lineage: Velo<L>[] = [];
-    let curr: Velo<L> | null = from;
+  private *walkLineage(): Generator<Velo<L>> {
+    let curr: Velo<L> | null = this;
     while (curr) {
-      lineage.unshift(curr);
+      yield curr;
       curr = curr.parent;
     }
-    return lineage;
   }
 
   // Helper to get effective handlers, traversing lineage if necessary
   protected get errorHandler(): ErrorHandler<L> {
-    const lineage = this.getLineage();
-    for (let i = lineage.length - 1; i >= 0; i--) {
-        const handler = lineage[i]._errorHandler;
-        if (handler) return handler;
+    for (const scope of this.walkLineage()) {
+      if (scope._errorHandler) return scope._errorHandler;
     }
     return this.defaultErrorHandler.bind(this);
   }
 
   protected get notFoundHandler(): Handler<L> {
-    const lineage = this.getLineage();
-    for (let i = lineage.length - 1; i >= 0; i--) {
-        const handler = lineage[i]._notFoundHandler;
-        if (handler) return handler;
+    for (const scope of this.walkLineage()) {
+      if (scope._notFoundHandler) return scope._notFoundHandler;
     }
     return () => { throw new NotFoundError(); };
   }
@@ -136,16 +128,22 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
 
   private wrapWebSocketHandler(handler: WebSocketHandler): Middleware<L> {
     return async (ctx, next) => {
-      // This is a marker for handleUpgrade to find the handler
-      (ctx as VeloInternalContext<L>)._wsHandler = handler;
+      wsHandlers.set(ctx, handler);
       await next();
     };
   }
 
-  private addRoute(method: string, path: string, handlers: (Handler<L> | Middleware<L>)[]) {
+  private addRoute(method: string, path: string, handlers: VeloHandler<L>[]) {
     const fullPath = this.basePath + path;
+    const normalizedHandlers = handlers.map(h => {
+      if (h.length > 1) return h as Middleware<L>;
+      return (async (ctx, next) => {
+        await (h as Handler<L>)(ctx);
+        await next();
+      }) as Middleware<L>;
+    });
     const entry: RouteEntry<L> = {
-      handlers: handlers as Middleware<L>[],
+      handlers: normalizedHandlers,
       scope: this
     };
     this.router.add(method, fullPath, entry);
@@ -212,7 +210,7 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
 
     if (root._options.headersTimeout) {
       let buffer = "";
-      let timeout = setTimeout(() => {
+      const timeout = setTimeout(() => {
         if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
           socket.destroy();
         }
@@ -223,14 +221,6 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
         if (buffer.includes("\r\n\r\n")) {
           clearTimeout(timeout);
           socket.removeListener("data", onData);
-        } else {
-          // Restart timeout as we received some data but not all headers
-          clearTimeout(timeout);
-          timeout = setTimeout(() => {
-            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
-              socket.destroy();
-            }
-          }, root._options.headersTimeout);
         }
       };
 
@@ -271,12 +261,16 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
   }
 
   protected getRoot(): Velo<L> {
-    return this.getLineage()[0];
+    let root: Velo<L> = this;
+    for (const scope of this.walkLineage()) {
+      root = scope;
+    }
+    return root;
   }
 
   protected getMiddlewarePipeline(path: string, scope: Velo<L>): Middleware<L>[] {
     const pipeline: Middleware<L>[] = [];
-    const lineage = this.getLineage(scope);
+    const lineage = Array.from(scope.walkLineage()).reverse();
 
     for (const s of lineage) {
       for (const mw of s.middlewares) {
@@ -320,7 +314,7 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
       pipeline.push(...this.getMiddlewarePipeline(ctx.req.path, scope));
 
       ctx.req.params = { ...ctx.req.params, ...matchInfo.result.params };
-      pipeline.push(...(handlers as Middleware<L>[]));
+      pipeline.push(...handlers);
     } else if (matchInfo.methodNotAllowed) {
       pipeline.push(async () => { throw new MethodNotAllowedError(); });
     } else {
@@ -355,9 +349,9 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
 
     let wsHandler: WebSocketHandler | undefined;
 
-    pipeline.push(...(handlers as Middleware<L>[]));
+    pipeline.push(...handlers);
     pipeline.push(async (c) => {
-        wsHandler = (c as VeloInternalContext<L>)._wsHandler;
+        wsHandler = wsHandlers.get(c);
         if (wsHandler) {
             // If it's a websocket upgrade, we should NOT have sent a response yet
             if (!vRes.sent) {

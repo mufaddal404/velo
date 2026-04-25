@@ -21,7 +21,7 @@ export interface VeloResponse {
   get(name: string): string | undefined;
   remove(name: string): this;
   type(contentType: string): this;
-  send(body?: string | Buffer | object): void;
+  send(body?: unknown): void;
   json(data: unknown): void;
   html(body: string): void;
   redirect(url: string, code?: number): void;
@@ -70,7 +70,7 @@ export class Response implements VeloResponse {
     return this;
   }
 
-  send(body?: string | Buffer | object): void {
+  send(body?: unknown): void {
     if (this.sent) throw new ResponseAlreadySentError();
     this.sent = true;
 
@@ -81,11 +81,9 @@ export class Response implements VeloResponse {
       return;
     }
 
-    if (typeof body === "object" && !Buffer.isBuffer(body)) {
-      const json = JSON.stringify(body);
-      if (!this.get("Content-Type")) this.type("application/json");
-      this.set("Content-Length", Buffer.byteLength(json).toString());
-      this.raw.end(json);
+    if (Buffer.isBuffer(body)) {
+      if (!this.get("Content-Type")) this.type("application/octet-stream");
+      this.raw.end(body);
       return;
     }
 
@@ -95,16 +93,20 @@ export class Response implements VeloResponse {
       return;
     }
 
-    if (Buffer.isBuffer(body)) {
-      if (!this.get("Content-Type")) this.type("application/octet-stream");
-      this.raw.end(body);
+    if (typeof body === "object" || typeof body === "number" || typeof body === "boolean") {
+      const json = JSON.stringify(body);
+      if (!this.get("Content-Type")) this.type("application/json");
+      this.set("Content-Length", Buffer.byteLength(json).toString());
+      this.raw.end(json);
       return;
     }
+
+    this.raw.end();
   }
 
   json(data: unknown): void {
     if (!this.get("Content-Type")) this.type("application/json");
-    this.send(data as string | Buffer | object);
+    this.send(data);
   }
 
   html(body: string): void {
