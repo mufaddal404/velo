@@ -3,84 +3,79 @@
 ## 1. Adversarial Review & Security Analysis
 
 ### Path Traversal (src/static.ts)
-- **Finding**: The path traversal protection is implemented using a multi-layered approach:
-    1. Explicit check for `..` in the decoded URI.
-    2. Use of `path.normalize()`.
-    3. Verification that the resulting `fullPath` starts with the `root` directory.
-- **Security Rating**: **Safe**. The implementation correctly handles common traversal vectors, including encoded characters.
-- **Note**: The use of `sep` (platform-specific separator) in `fullPath.startsWith(root + sep)` ensures that a directory named `/var/www-secret` cannot be accessed if the root is `/var/www`.
+- **Finding**: Multi-layered protection is used:
+    1. Pre-normalization check for `..` in decoded URI.
+    2. `path.normalize()` used on joined path.
+    3. Final check that `fullPath` starts with the resolved `root` directory using `sep` to prevent partial name matches (e.g., `/var/www` vs `/var/www-secret`).
+- **Security Rating**: **Safe**. The implementation is robust against common path traversal attacks.
 
 ### WebSocket Implementation (src/websocket.ts)
-- **Finding**: Handshake and framing follow RFC 6455 strictly.
+- **Finding**: Custom implementation of RFC 6455.
 - **Security Features**:
-    - **Buffer Overflow Protection**: `maxBufferSize` (1MB default) is enforced for both standard and fragmented messages.
-    - **Masking**: Mandatory for client frames; server rejects unmasked frames.
-    - **Control Frames**: Correctly validated (non-fragmented, size limit <= 125 bytes).
-    - **Error Handling**: Invalid UTF-8 in text frames results in a 1007 closure.
-- **Security Rating**: **Safe**. The "from-scratch" implementation is robust against common WS attacks.
+    - **Buffer Limits**: `maxBufferSize` (1MB default) enforced for reassembly and fragmentation.
+    - **Masking**: Mandatory for client-to-server frames as per RFC.
+    - **Control Frame Validation**: Ensures control frames are not fragmented and have length <= 125.
+    - **UTF-8 Validation**: Text frames are validated during decoding; failure results in 1007 (Invalid Frame Payload Data).
+- **Security Rating**: **Safe**. The implementation handles the complex requirements of RFC 6455 securely.
 
-### Denial of Service (DoS) Mitigation
-- **Slowloris**: `src/server.ts` implements a custom `headersTimeout` mechanism that monitors the "data" event on raw sockets to ensure headers are completed within the timeout.
-- **Payload Limit**: `bodyLimit` (1MB default) is enforced during body consumption in `src/request.ts` and in WebSocket frame processing.
-- **Security Rating**: **Good**. Basic DoS protections are in place.
+### Denial of Service (DoS)
+- **Slowloris Mitigation**: `src/server.ts` uses both Node's built-in `headersTimeout` and a custom `setupSocketTimeout` that manually checks for header completion (`\r\n\r\n`). 
+- **Payload Limits**: `bodyLimit` is correctly enforced in `src/request.ts` during lazy body reading and in WebSocket frame processing.
+- **Range Request DoS**: `src/static.ts` limits the number of ranges (`maxRanges: 10`) to prevent resource exhaustion attacks.
+- **Backpressure Issue (src/static.ts)**: **Vulnerability Detected**. In the multipart range handling, `out.write()` is called without checking its return value or waiting for 'drain'. A slow client combined with a large file and multiple ranges could cause unbounded memory growth in the `PassThrough` buffer.
+- **Security Rating**: **Good (with one caveat)**. The backpressure issue in multipart ranges should be addressed.
 
-### IP Spoofing
-- **Finding**: `trustProxy` supports both boolean and hop-count (number).
-- **Security Rating**: **Acceptable**. While simple, it allows developers to configure trust levels appropriately for their environment.
+### IP Spoofing & Trust Proxy
+- **Finding**: `trustProxy` implementation correctly handles both boolean (trust last) and number (hop count).
+- **Security Rating**: **Safe**. Standard implementation for proxy-aware IP extraction.
 
 ## 2. Type System Review
 
 ### Type System Workarounds & "Hacks"
-- **Finding**: Extensive use of `any` and `as unknown as` throughout the core logic.
-    - `src/server.ts`: `RouteEntry<L = any>` and `VeloInternalContext<L = any>` use `any`, bypassing strict checks for route handlers and internal state.
-    - `src/server.ts`: Lineage traversal for `errorHandler` and `router` sharing uses `as unknown as Router<RouteEntry<L>>`.
-    - `src/validation.ts`: `optional()` uses `this as unknown as BaseSchema<T | undefined>`. This is a builder pattern hack that effectively lies to the compiler about the instance type.
-    - `src/request.ts`: `parseQuery` result is cast to `Record<string, string | string[]>`.
-- **Verdict**: While `npx tsc --noEmit` passes, the codebase relies heavily on type assertions and `any` to manage its hierarchical structure and generics. This reduces the safety benefits of the strict type system.
+The codebase contains several instances of type assertions and `any` usage to bypass the type system or "make the code just work":
 
-### Generic Locals (`L`)
-- **Finding**: The `L` generic for `locals` is inconsistently applied or defaulted to `any` in many internal signatures, which cascades through the middleware pipeline.
+1. **src/validation.ts**: `_rules` array is typed as `((val: any, path: string) => ValidationError | null)[]`. The use of `any` here bypasses type checking for individual validator rules.
+2. **src/server.ts**: In `addRoute`, handlers are cast using `handlers as Middleware<L>[]`. This is because `addRoute` accepts both `Handler` (1 arg) and `Middleware` (2 args). While functional in JS, it "lies" to the middleware composer about the signature of the handlers.
+3. **src/response.ts**: `json(data: unknown)` method calls `this.send(data as string | Buffer | object)`. This cast is necessary because `send` has a narrower signature than `unknown`.
+4. **src/request.ts**: `this.raw.headers as Record<string, string | string[]>` is used to satisfy the interface, as Node's `IncomingHttpHeaders` is slightly different.
+5. **src/server.ts**: `(ctx as VeloInternalContext<L>)` is used in `wrapWebSocketHandler` to attach an internal `_wsHandler` marker, which is then retrieved in `handleUpgrade`.
 
-## 3. Adherence to @spec.md
+**Verdict**: The type system is mostly strict, but these workarounds indicate areas where the architectural design (like mixing Handlers and Middleware or internal markers) forced type-safety compromises.
 
-### Core Requirements
-- **Radix Tree Router**: **Compliant**. `src/router.ts` implements a proper compressed prefix tree with node splitting.
-- **Zero Dependencies**: **Compliant**. Only `node:*` modules are used.
-- **Middleware Pipeline**: **Compliant**. Implements `next()` advancing and 500-error on unhandled skips.
-- **Static Files**: **Compliant**. Supports ETags, Ranges (single and multipart), and dotfile rules.
-- **Validation**: **Compliant**. Builder-style API matches the spec.
-- **Plugin System**: **Compliant**. Supports scoping and `decorate()`.
-
-### Performance & Quality
-- **Linear Scan vs. Trie**: The router uses a Trie, satisfying the requirement for non-linear lookups.
-- **Graceful Shutdown**: Implemented in `src/server.ts`. It waits for the HTTP server to close (draining in-flight requests) and explicitly destroys WebSockets.
-
-## 4. Test Case Review
-
-### Coverage & Accuracy
-- **Finding**: The project contains 102 tests, exceeding the 75 required tests.
-- **Verification**: 
-    - All 75 specific test scenarios listed in `@spec.md` are accounted for and numbered in the test files.
-    - Additional tests cover edge cases like URI decoding errors, double-slash normalization, and stream error handling.
-- **Functionality**: Tests use `node:test` and `node:assert` as required. They correctly capture behavioral requirements.
-
-## 5. Redundancy & Code Quality
+## 3. Redundancy & Code Quality
 
 ### Duplicated Logic
-- **Linage Traversal**: `src/server.ts` contains multiple methods that traverse the `parent` chain (`getRoot`, `getMiddlewarePipeline`, `errorHandler`, `notFoundHandler`). While functional, this logic is slightly fragmented.
-- **Router Instances**: Separate `router` and `wsRouter` instances are used. This is a clean separation of concerns.
+- **Lineage Traversal**: `Velo` class implements `getLineage()`, `getRoot()`, `errorHandler`, and `notFoundHandler` which all traverse the parent chain. This could be consolidated.
+- **Header Parsing**: `src/server.ts` manually parses headers for `\r\n\r\n` to implement a timeout, which is partially redundant with Node's native `headersTimeout`.
+- **Static Path Check**: `src/static.ts` checks for `..` before calling `normalize()`. `normalize()` followed by a `startsWith(root)` check is sufficient and more robust.
 
-### Efficiency
-- **Middleware Composition**: The `compose` function is a standard, efficient implementation of the "onion" model.
-- **Body Parsing**: Bodies are read lazily, which is efficient for memory and performance.
+### Redundant Code
+- **Router Separation**: Using separate `router` and `wsRouter` is clean but leads to some duplicated logic in `Velo` for adding routes vs adding WS handlers.
+
+## 4. Adherence to @spec.md
+
+- **Radix Tree Router**: **Fully Compliant**. Implements node splitting and proper matching priority (Static > Param > Wildcard).
+- **Zero Dependencies**: **Fully Compliant**. Only Node.js built-in modules are used.
+- **WebSocket**: **Fully Compliant**. Implements the full handshake and framing from scratch.
+- **Static Files**: **Fully Compliant**. Supports all required MIME types, ETags, and Range requests.
+- **Validation**: **Fully Compliant**. Builder-style API works as specified.
+- **Plugin System**: **Fully Compliant**. Supports `decorate()` and encapsulation via `scope()`.
+
+## 5. Test Case Review
+
+### Coverage
+- **Total Tests**: 102 tests.
+- **Spec Coverage**: All 75 mandatory test cases from `@spec.md` are implemented and numbered (e.g., `Router - 1.`, `Static - 43.`).
+- **Effectiveness**: The tests use `node:test` and `node:assert`. They effectively cover both happy paths and error conditions (404, 405, 413, 422, etc.).
+- **Missing Tests**: No significant functionality from the spec is missing tests. Some edge cases like WebSocket fragmentation and multi-range static serving are well-covered.
 
 ## 6. Summary of Findings
 
 | Category | Status | Notes |
 | :--- | :--- | :--- |
-| **Security** | ✅ Secure | Good protections against DoS, Traversal, and WS attacks. |
-| **Type Safety** | ⚠️ Weak | Excessive use of `any` and type assertions. |
-| **Spec Compliance**| ✅ Full | All features and test cases implemented as requested. |
-| **Redundancy** | ✅ Low | Clean separation of components. |
+| **Security** | ⚠️ Caution | Backpressure issue in `static.ts` multipart ranges. |
+| **Type Safety** | ⚠️ Acceptable | Some `any` and casts used in core logic and `locals` handling. |
+| **Spec Compliance**| ✅ Full | All required features and 75+ tests implemented. |
+| **Redundancy** | ⚠️ Moderate | Redundant lineage traversal and manual header parsing. |
 
-**Overall Recommendation**: The codebase is functionally solid and secure, but the internal type architecture should be refactored to remove "type hacks" and `any` usage to truly leverage TypeScript's strict mode.
+**Final Recommendation**: Address the backpressure issue in the `staticFiles` plugin to prevent potential memory-based DoS. Consider refactoring the `Velo` class to consolidate lineage traversal logic and improve internal type definitions to reduce reliance on `any` and type assertions.
