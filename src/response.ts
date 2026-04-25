@@ -121,7 +121,17 @@ export class Response implements VeloResponse {
   stream(readable: Readable): void {
     if (this.sent) throw new ResponseAlreadySentError();
     this.sent = true;
-    if (this.raw) readable.pipe(this.raw);
+    if (this.raw) {
+      readable.on("error", (err) => {
+        if (!this.raw.headersSent) {
+          this.sent = false;
+          this.status(500).send("Internal Server Error");
+        } else {
+          this.raw.destroy();
+        }
+      });
+      readable.pipe(this.raw);
+    }
   }
 
   cookie(name: string, value: string, options: CookieOptions = {}): this {

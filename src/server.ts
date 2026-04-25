@@ -11,7 +11,7 @@ import { type Plugin } from "./plugin.js";
 import { type WebSocketHandler, handleUpgrade as performWebSocketUpgrade } from "./websocket.js";
 
 export interface VeloOptions {
-  trustProxy?: boolean;
+  trustProxy?: boolean | number;
   bodyLimit?: number;
   clock?: () => number;
   headersTimeout?: number;
@@ -200,10 +200,16 @@ export class Velo<L = any> {
     const root = this.getRoot();
     if (!root.server) return;
     
+    // Force close WebSockets as they don't naturally "end" like HTTP requests
     for (const socket of root.connections) {
       if (root.wsSockets.has(socket)) {
         socket.destroy();
       }
+    }
+
+    // Node.js 18.2.0+ supports closeIdleConnections()
+    if (typeof (root.server as any).closeIdleConnections === "function") {
+      (root.server as any).closeIdleConnections();
     }
     
     return new Promise((resolve, reject) => {
@@ -236,7 +242,12 @@ export class Velo<L = any> {
 
     for (const s of lineage) {
       for (const mw of s.middlewares) {
-        if (path.startsWith(mw.prefix)) {
+        if (mw.prefix === "/" || mw.prefix === "") {
+          pipeline.push(mw.fn);
+          continue;
+        }
+
+        if (path === mw.prefix || path.startsWith(mw.prefix + "/")) {
           pipeline.push(mw.fn);
         }
       }

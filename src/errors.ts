@@ -43,7 +43,7 @@ export class PayloadTooLargeError extends VeloError {
 }
 
 export class UnprocessableEntityError extends VeloError {
-  constructor(message = "Unprocessable Entity", public fields?: any[]) {
+  constructor(message = "Unprocessable Entity", public fields?: Record<string, unknown>[]) {
     super(message, 422, "UNPROCESSABLE_ENTITY");
   }
 }

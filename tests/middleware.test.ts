@@ -146,3 +146,30 @@ test("Middleware - 16. Error handler receives the thrown error instance", async 
   }
 });
 
+test("Middleware - 16.1. Prefix-scoped middleware does not match longer path starts", async () => {
+  const app = new Velo();
+  let adminMiddlewareCalled = false;
+
+  app.use("/admin", async (ctx, next) => {
+    adminMiddlewareCalled = true;
+    await next();
+  });
+
+  app.get("/administration", (ctx: Context) => {
+    ctx.res.send("ok");
+  });
+
+  await app.listen(0);
+  const port = app.port;
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/administration`);
+    const text = await res.text();
+    
+    assert.strictEqual(text, "ok");
+    assert.strictEqual(adminMiddlewareCalled, false, "Middleware for /admin should NOT be called for /administration");
+  } finally {
+    await app.close();
+  }
+});
+

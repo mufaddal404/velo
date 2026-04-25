@@ -20,18 +20,18 @@ export interface VeloRequest<L = any> {
   secure: boolean;
   xhr: boolean;
   cookies: Record<string, string>;
-  locals: L;
+  locals: Partial<L>;
 }
 
 export class Request<L = any> implements VeloRequest<L> {
   public params: Record<string, string> = {};
-  public locals: L = {} as L;
+  public locals: Partial<L> = {};
   private _body: Buffer | null = null;
   private _bodyConsumed = false;
 
   constructor(
     public raw: IncomingMessage,
-    private options: { trustProxy?: boolean; bodyLimit?: number } = {}
+    private options: { trustProxy?: boolean | number; bodyLimit?: number } = {}
   ) {}
 
   get method() {
@@ -103,8 +103,11 @@ export class Request<L = any> implements VeloRequest<L> {
     if (this.options.trustProxy) {
       const forwarded = this.header("x-forwarded-for");
       if (forwarded) {
-        // Take the leftmost IP in X-Forwarded-For if we trust the proxy.
         const ips = forwarded.split(",").map(ip => ip.trim());
+        if (typeof this.options.trustProxy === "number") {
+          const hop = this.options.trustProxy;
+          return ips[ips.length - hop] || ips[0];
+        }
         return ips[0];
       }
     }
@@ -120,7 +123,14 @@ export class Request<L = any> implements VeloRequest<L> {
     if (this.options.trustProxy) {
       const proto = this.header("x-forwarded-proto");
       if (proto) {
-        const p = proto.split(",")[0].trim().toLowerCase();
+        const protos = proto.split(",").map(p => p.trim().toLowerCase());
+        let p: string;
+        if (typeof this.options.trustProxy === "number") {
+          const hop = this.options.trustProxy;
+          p = protos[protos.length - hop] || protos[0];
+        } else {
+          p = protos[0];
+        }
         if (p === "https" || p === "http") return p as "http" | "https";
       }
     }

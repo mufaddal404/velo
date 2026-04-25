@@ -221,3 +221,33 @@ test("Request - 25. ip ignores X-Forwarded-For when trustProxy: false", async ()
   }
 });
 
+test("Request - 24.1. ip reflects correct hop in X-Forwarded-For when trustProxy is a number", async () => {
+  const app = new Velo({ trustProxy: 1 });
+  app.get("/ip", (ctx: Context) => ctx.res.send(ctx.req.ip));
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/ip`, {
+      headers: { "X-Forwarded-For": "client, proxy1" }
+    });
+    assert.strictEqual(await res.text(), "proxy1");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Request - 24.2. protocol reflects correct hop in X-Forwarded-Proto when trustProxy is a number", async () => {
+    const app = new Velo({ trustProxy: 2 });
+    app.get("/proto", (ctx: Context) => ctx.res.send(ctx.req.protocol));
+    await app.listen(0);
+    const port = app.port;
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/proto`, {
+            headers: { "X-Forwarded-Proto": "https, http" }
+        });
+        assert.strictEqual(await res.text(), "https");
+    } finally {
+        await app.close();
+    }
+});
+

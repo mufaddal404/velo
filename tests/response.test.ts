@@ -139,3 +139,49 @@ test("Response - Cookie injection escaping", async () => {
     await app.close();
   }
 });
+
+test("Response - 33.1. stream() error handling (before headers)", async () => {
+  const app = new Velo();
+  app.get("/", (ctx: Context) => {
+    const s = new Readable({
+      read() {
+        this.emit("error", new Error("stream failure"));
+      }
+    });
+    ctx.res.stream(s);
+  });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/`);
+    assert.strictEqual(res.status, 500);
+    assert.strictEqual(await res.text(), "Internal Server Error");
+  } finally {
+    await app.close();
+  }
+});
+
+test("Response - 33.2. stream() error handling (after headers)", async () => {
+  const app = new Velo();
+  app.get("/", (ctx: Context) => {
+    const s = new Readable({
+      read() {
+        ctx.res.raw.writeHead(200);
+        ctx.res.raw.write("partial");
+        this.emit("error", new Error("late failure"));
+      }
+    });
+    ctx.res.stream(s);
+  });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/`);
+    await res.text();
+    assert.fail("Should have failed");
+  } catch (err) {
+    // Expected failure (connection reset/destroyed)
+  } finally {
+    await app.close();
+  }
+});

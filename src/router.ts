@@ -146,10 +146,9 @@ export class Router<T = any> {
 
       // Try static children
       const char = remaining[0];
-      for (const child of node.children) {
-        if (child.path[0] === char) {
-          if (search(child, remaining, params)) return true;
-        }
+      const idx = node.indices.indexOf(char);
+      if (idx !== -1) {
+        if (search(node.children[idx], remaining, params)) return true;
       }
 
       // Try param child
