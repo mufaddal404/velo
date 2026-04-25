@@ -108,7 +108,7 @@ export class Request<L extends Record<string, unknown> = Record<string, unknown>
           const hop = this.options.trustProxy;
           return ips[ips.length - hop] || ips[0];
         }
-        return ips[ips.length - 1];
+        return ips[0];
       }
     }
     return this.raw.socket.remoteAddress || "";
@@ -129,7 +129,7 @@ export class Request<L extends Record<string, unknown> = Record<string, unknown>
           const hop = this.options.trustProxy;
           p = protos[protos.length - hop] || protos[0];
         } else {
-          p = protos[protos.length - 1];
+          p = protos[0];
         }
         if (p === "https" || p === "http") return p as "http" | "https";
       }

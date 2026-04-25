@@ -121,17 +121,17 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
         
         if (startStr === "") {
           const suffix = parseInt(endStr, 10);
-          if (isNaN(suffix)) continue;
+          if (isNaN(suffix) || suffix < 0) continue;
           start = Math.max(0, stats.size - suffix);
           end = stats.size - 1;
         } else {
           start = parseInt(startStr, 10);
-          if (isNaN(start)) continue;
+          if (isNaN(start) || start < 0) continue;
           if (endStr === "") {
             end = stats.size - 1;
           } else {
             end = parseInt(endStr, 10);
-            if (isNaN(end)) continue;
+            if (isNaN(end) || end < 0) continue;
           }
         }
         
@@ -166,7 +166,7 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
         const out = new PassThrough();
         ctx.res.stream(out);
         
-        const write = async (chunk: any) => {
+        const write = async (chunk: string | Buffer) => {
           if (!out.write(chunk)) {
             await new Promise((resolve) => out.once("drain", resolve));
           }

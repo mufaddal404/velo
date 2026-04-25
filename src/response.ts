@@ -150,8 +150,14 @@ export class Response implements VeloResponse {
     if (options.httpOnly) str += "; HttpOnly";
     if (options.secure) str += "; Secure";
     if (options.sameSite) str += `; SameSite=${options.sameSite}`;
-    if (options.path) str += `; Path=${options.path}`;
-    if (options.domain) str += `; Domain=${options.domain}`;
+    if (options.path) {
+      const sanitizedPath = options.path.replace(/[;=\n\r]/g, "");
+      str += `; Path=${sanitizedPath}`;
+    }
+    if (options.domain) {
+      const sanitizedDomain = options.domain.replace(/[;=\n\r]/g, "");
+      str += `; Domain=${sanitizedDomain}`;
+    }
 
     if (!this.raw) return this;
 

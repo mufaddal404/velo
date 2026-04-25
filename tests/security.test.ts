@@ -64,8 +64,7 @@ test("Security - 77. Basic check for connection cleanup", async () => {
       sockets.push(socket);
     }
 
-    // @ts-ignore - access internal connections for verification
-    const internalConnections = app.connections;
+    const internalConnections = (app as unknown as { connections: Set<net.Socket> }).connections;
     assert.ok(internalConnections.size >= connections, `Should have at least ${connections} connections tracked`);
 
     for (const socket of sockets) {
@@ -81,6 +80,60 @@ test("Security - 77. Basic check for connection cleanup", async () => {
     assert.strictEqual(internalConnections.size, 0, "All connections should have been cleaned up");
   } finally {
     for (const socket of sockets) socket.destroy();
+    await app.close();
+  }
+});
+
+test("Security - 78. Header buffer size limit (DoS mitigation)", async () => {
+  const app = new Velo({ headersTimeout: 1000 });
+  app.get("/", (ctx: Context) => ctx.res.send("ok"));
+  await app.listen(0);
+  const port = app.port!;
+
+  const socket = net.createConnection(port, "127.0.0.1");
+  
+  try {
+    const closedPromise = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error("Socket was not closed by server when exceeding header limit"));
+      }, 5000);
+
+      socket.on("connect", async () => {
+        try {
+          socket.write("GET / HTTP/1.1\r\n");
+          
+          // Send 20KB of data in small chunks to give the server's 'data' event 
+          // and subsequent 'destroy()' call a chance to be processed by the event loop.
+          const chunkSize = 1024;
+          const totalSize = 20 * 1024;
+          const chunk = "X-Header: " + "a".repeat(chunkSize) + "\r\n";
+          
+          for (let i = 0; i < totalSize / chunkSize; i++) {
+            if (socket.destroyed) break;
+            socket.write(chunk);
+            // Small pause to yield the event loop
+            await new Promise(r => setImmediate(r));
+          }
+        } catch (e) {
+          // Ignore write errors after destruction
+        }
+      });
+      
+      socket.on("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      
+      socket.on("error", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+
+    await closedPromise;
+    assert.ok(true, "Socket was closed by server due to exceeding MAX_HEADER_SIZE");
+  } finally {
+    socket.destroy();
     await app.close();
   }
 });

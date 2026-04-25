@@ -87,6 +87,7 @@ class VeloWebSocketImpl implements VeloWebSocket {
   private _closeReason = "";
   public locals: Record<string, unknown> = {};
   private buffer = Buffer.alloc(0);
+  private offset = 0;
   private fragmentedBuffer = Buffer.alloc(0);
   private fragmentedOpcode = 0;
   private maxBufferSize: number;
@@ -117,10 +118,21 @@ class VeloWebSocketImpl implements VeloWebSocket {
     if (this._readyState !== "open") return;
     this._readyState = "closing";
     this._closeCode = code;
-    this._closeReason = reason;
-    const payload = Buffer.alloc(2 + Buffer.byteLength(reason));
+    
+    // RFC 6455: Control frames (like Close) MUST NOT have a payload length > 125 bytes.
+    // The payload for a Close frame starts with a 2-byte status code.
+    let reasonBuffer = Buffer.from(reason);
+    if (reasonBuffer.length > 123) {
+      reasonBuffer = reasonBuffer.slice(0, 123);
+      // Ensure we don't truncate in the middle of a multi-byte UTF-8 character
+      this._closeReason = reasonBuffer.toString("utf8");
+    } else {
+      this._closeReason = reason;
+    }
+
+    const payload = Buffer.alloc(2 + reasonBuffer.length);
     payload.writeUInt16BE(code, 0);
-    payload.write(reason, 2);
+    reasonBuffer.copy(payload, 2);
     this.sendFrame(0x08, payload);
   }
 
@@ -146,14 +158,25 @@ class VeloWebSocketImpl implements VeloWebSocket {
   }
 
   handleData(data: Buffer, handler: WebSocketHandler) {
-    if (this.buffer.length + data.length > this.maxBufferSize) {
+    const remaining = this.buffer.length - this.offset;
+    if (remaining + data.length > this.maxBufferSize) {
         throw new Error("WebSocket buffer overflow");
     }
-    this.buffer = Buffer.concat([this.buffer, data]);
+    
+    // Compact buffer if offset is significant
+    if (this.offset > 0 && (this.offset > 4096 || this.offset > remaining)) {
+        const newBuffer = Buffer.alloc(remaining + data.length);
+        this.buffer.copy(newBuffer, 0, this.offset);
+        data.copy(newBuffer, remaining);
+        this.buffer = newBuffer;
+        this.offset = 0;
+    } else {
+        this.buffer = Buffer.concat([this.buffer, data]);
+    }
 
-    while (this.buffer.length >= 2) {
-      const firstByte = this.buffer[0];
-      const secondByte = this.buffer[1];
+    while (this.buffer.length - this.offset >= 2) {
+      const firstByte = this.buffer[this.offset];
+      const secondByte = this.buffer[this.offset + 1];
       
       const fin = (firstByte & 0x80) !== 0;
       const rsv = firstByte & 0x70;
@@ -171,16 +194,16 @@ class VeloWebSocketImpl implements VeloWebSocket {
         throw new Error("Client frames must be masked");
       }
 
-      let offset = 2;
+      let innerOffset = 2;
 
       if (payloadLength === 126) {
-        if (this.buffer.length < 4) break;
-        payloadLength = this.buffer.readUInt16BE(2);
-        offset = 4;
+        if (this.buffer.length - this.offset < 4) break;
+        payloadLength = this.buffer.readUInt16BE(this.offset + 2);
+        innerOffset = 4;
       } else if (payloadLength === 127) {
-        if (this.buffer.length < 10) break;
-        payloadLength = this.buffer.readBigUInt64BE(2);
-        offset = 10;
+        if (this.buffer.length - this.offset < 10) break;
+        payloadLength = this.buffer.readBigUInt64BE(this.offset + 2);
+        innerOffset = 10;
       }
 
       const length = Number(payloadLength);
@@ -188,14 +211,14 @@ class VeloWebSocketImpl implements VeloWebSocket {
           throw new Error("WebSocket payload too large");
       }
 
-      if (this.buffer.length < offset + 4) break;
-      const maskingKey = this.buffer.slice(offset, offset + 4);
-      offset += 4;
+      if (this.buffer.length - this.offset < innerOffset + 4) break;
+      const maskingKey = this.buffer.slice(this.offset + innerOffset, this.offset + innerOffset + 4);
+      innerOffset += 4;
 
-      if (this.buffer.length < offset + length) break;
+      if (this.buffer.length - this.offset < innerOffset + length) break;
 
-      let payload = this.buffer.slice(offset, offset + length);
-      this.buffer = this.buffer.slice(offset + length);
+      let payload = this.buffer.slice(this.offset + innerOffset, this.offset + innerOffset + length);
+      this.offset += innerOffset + length;
 
       const unmasked = Buffer.alloc(payload.length);
       for (let i = 0; i < payload.length; i++) {

@@ -29,7 +29,7 @@ interface RouteEntry<L extends Record<string, unknown>> {
   scope: Velo<L>;
 }
 
-const wsHandlers = new WeakMap<Context<any>, WebSocketHandler>();
+const wsHandlers = new WeakMap<Context, WebSocketHandler>();
 
 export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
   public server?: HttpServer | HttpsServer;
@@ -209,6 +209,7 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
     root.connections.add(socket);
 
     if (root._options.headersTimeout) {
+      const MAX_HEADER_SIZE = 16 * 1024;
       let buffer = "";
       const timeout = setTimeout(() => {
         if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
@@ -217,7 +218,14 @@ export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
       }, root._options.headersTimeout);
 
       const onData = (chunk: Buffer) => {
+        if (buffer.length + chunk.length > MAX_HEADER_SIZE) {
+          socket.removeListener("data", onData);
+          socket.destroy();
+          return;
+        }
+
         buffer += chunk.toString("latin1");
+
         if (buffer.includes("\r\n\r\n")) {
           clearTimeout(timeout);
           socket.removeListener("data", onData);
