@@ -167,74 +167,8 @@ export class Velo<L = any> {
         }
       }
       
-      root.server.on("connection", (socket: Socket) => {
-        root.connections.add(socket);
-        
-        // Manual headers timeout
-        if (root._options.headersTimeout) {
-          let buffer = "";
-          let timeout = setTimeout(() => {
-            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
-              socket.destroy();
-            }
-          }, root._options.headersTimeout);
-
-          const onData = (chunk: Buffer) => {
-            buffer += chunk.toString("latin1");
-            if (buffer.includes("\r\n\r\n")) {
-              clearTimeout(timeout);
-              socket.removeListener("data", onData);
-            } else {
-              // Restart timeout as we received some data but not all headers
-              clearTimeout(timeout);
-              timeout = setTimeout(() => {
-                if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
-                  socket.destroy();
-                }
-              }, root._options.headersTimeout);
-            }
-          };
-
-          socket.on("data", onData);
-          socket.on("close", () => clearTimeout(timeout));
-        }
-
-        socket.on("close", () => root.connections.delete(socket));
-      });
-      root.server.on("secureConnection", (socket: TLSSocket) => {
-        root.connections.add(socket);
-
-        // Manual headers timeout
-        if (root._options.headersTimeout) {
-          let buffer = "";
-          let timeout = setTimeout(() => {
-            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
-              socket.destroy();
-            }
-          }, root._options.headersTimeout);
-
-          const onData = (chunk: Buffer) => {
-            buffer += chunk.toString("latin1");
-            if (buffer.includes("\r\n\r\n")) {
-              clearTimeout(timeout);
-              socket.removeListener("data", onData);
-            } else {
-              // Restart timeout as we received some data but not all headers
-              clearTimeout(timeout);
-              timeout = setTimeout(() => {
-                if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
-                  socket.destroy();
-                }
-              }, root._options.headersTimeout);
-            }
-          };
-
-          socket.on("data", onData);
-          socket.on("close", () => clearTimeout(timeout));
-        }
-
-        socket.on("close", () => root.connections.delete(socket));
-      });
+      root.server.on("connection", (socket: Socket) => root.setupSocketTimeout(socket));
+      root.server.on("secureConnection", (socket: TLSSocket) => root.setupSocketTimeout(socket));
       root.server.on("upgrade", (req, socket, head) => {
         root.wsSockets.add(socket as Socket);
         root.connections.add(socket as Socket);
@@ -254,6 +188,41 @@ export class Velo<L = any> {
         resolve();
       });
     });
+  }
+
+  protected setupSocketTimeout(socket: Socket | TLSSocket) {
+    const root = this.getRoot();
+    root.connections.add(socket);
+
+    if (root._options.headersTimeout) {
+      let buffer = "";
+      let timeout = setTimeout(() => {
+        if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+          socket.destroy();
+        }
+      }, root._options.headersTimeout);
+
+      const onData = (chunk: Buffer) => {
+        buffer += chunk.toString("latin1");
+        if (buffer.includes("\r\n\r\n")) {
+          clearTimeout(timeout);
+          socket.removeListener("data", onData);
+        } else {
+          // Restart timeout as we received some data but not all headers
+          clearTimeout(timeout);
+          timeout = setTimeout(() => {
+            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+              socket.destroy();
+            }
+          }, root._options.headersTimeout);
+        }
+      };
+
+      socket.on("data", onData);
+      socket.on("close", () => clearTimeout(timeout));
+    }
+
+    socket.on("close", () => root.connections.delete(socket));
   }
 
   async close(): Promise<void> {

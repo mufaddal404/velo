@@ -130,3 +130,31 @@ test("Validation - 63. validate() attaches parsed data to ctx.req.locals.validat
     await app.close();
   }
 });
+
+test("Validation - BodyAlreadyConsumedError if json() called after validate() with body schema", async () => {
+  const app = new Velo();
+  app.post("/test", validate({
+    body: v.object({ name: v.string() })
+  }), async (ctx: Context) => {
+    try {
+      await ctx.req.json();
+      ctx.res.send("ok");
+    } catch (e: any) {
+      ctx.res.status(500).send(e.name);
+    }
+  });
+  
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Bob" })
+    });
+    const text = await res.text();
+    assert.strictEqual(text, "BodyAlreadyConsumedError");
+  } finally {
+    await app.close();
+  }
+});

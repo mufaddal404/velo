@@ -108,7 +108,7 @@ export class Request<L = any> implements VeloRequest<L> {
           const hop = this.options.trustProxy;
           return ips[ips.length - hop] || ips[0];
         }
-        return ips[0];
+        return ips[ips.length - 1];
       }
     }
     return this.raw.socket.remoteAddress || "";
@@ -129,7 +129,7 @@ export class Request<L = any> implements VeloRequest<L> {
           const hop = this.options.trustProxy;
           p = protos[protos.length - hop] || protos[0];
         } else {
-          p = protos[0];
+          p = protos[protos.length - 1];
         }
         if (p === "https" || p === "http") return p as "http" | "https";
       }

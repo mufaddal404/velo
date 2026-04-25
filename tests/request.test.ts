@@ -196,7 +196,7 @@ test("Request - 24. ip reflects X-Forwarded-For when trustProxy: true", async ()
     await fetch(`http://localhost:${port}/`, {
       headers: { "X-Forwarded-For": "1.2.3.4, 5.6.7.8" }
     });
-    assert.strictEqual(ip, "1.2.3.4");
+    assert.strictEqual(ip, "5.6.7.8");
   } finally {
     await app.close();
   }
