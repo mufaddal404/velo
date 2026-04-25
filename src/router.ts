@@ -19,7 +19,7 @@ class Node<T> {
   }
 }
 
-export class Router<T = any> {
+export class Router<T = unknown> {
   private root = new Node<T>();
 
   private normalizePath(path: string): string {

@@ -1,14 +1,14 @@
 import { IncomingMessage } from "node:http";
 import { TLSSocket } from "node:tls";
-import { parse as parseQuery } from "node:querystring";
+import { parse as parseQuery, type ParsedUrlQuery } from "node:querystring";
 import { BadRequestError, PayloadTooLargeError, BodyAlreadyConsumedError } from "./errors.js";
 
-export interface VeloRequest<L = any> {
+export interface VeloRequest<L extends Record<string, unknown> = Record<string, unknown>> {
   raw: IncomingMessage;
   method: string;
   path: string;
   params: Record<string, string>;
-  query: Record<string, string | string[]>;
+  query: ParsedUrlQuery;
   headers: Record<string, string | string[]>;
   header(name: string): string | undefined;
   json<T = unknown>(): Promise<T>;
@@ -23,7 +23,7 @@ export interface VeloRequest<L = any> {
   locals: Partial<L> & { validated?: Record<string, unknown> };
 }
 
-export class Request<L = any> implements VeloRequest<L> {
+export class Request<L extends Record<string, unknown> = Record<string, unknown>> implements VeloRequest<L> {
   public params: Record<string, string> = {};
   public locals: Partial<L> & { validated?: Record<string, unknown> } = {};
   private _body: Buffer | null = null;
@@ -43,10 +43,10 @@ export class Request<L = any> implements VeloRequest<L> {
     return url.split("?")[0];
   }
 
-  get query() {
+  get query(): ParsedUrlQuery {
     const url = this.raw.url || "/";
     const queryString = url.split("?")[1] || "";
-    return parseQuery(queryString) as Record<string, string | string[]>;
+    return parseQuery(queryString);
   }
 
   get headers() {

@@ -13,11 +13,12 @@ export type ValidationResult<T> =
 
 abstract class BaseSchema<T> {
   protected _optional = false;
-  protected _rules: ((val: T, path: string) => ValidationError | null)[] = [];
+  protected _rules: ((val: any, path: string) => ValidationError | null)[] = [];
 
   optional(): BaseSchema<T | undefined> {
-    this._optional = true;
-    return this as unknown as BaseSchema<T | undefined>;
+    const clone = Object.assign(Object.create(Object.getPrototypeOf(this)), this);
+    clone._optional = true;
+    return clone as BaseSchema<T | undefined>;
   }
 
   protected abstract _typeCheck(val: unknown, path: string): ValidationError | null;
@@ -166,7 +167,7 @@ class ArraySchema<T> extends BaseSchema<T[]> {
 
 type Unwrap<T> = T extends BaseSchema<infer U> ? U : never;
 
-type ObjectShape = Record<string, BaseSchema<any>>;
+type ObjectShape = Record<string, BaseSchema<unknown>>;
 
 type ObjectOutput<T extends ObjectShape> = {
   [K in keyof T as undefined extends Unwrap<T[K]> ? never : K]: Unwrap<T[K]>;
@@ -227,7 +228,11 @@ export const v = {
   enum: <T>(values: T[]) => new EnumSchema(values),
 };
 
-export function validate(schemas: { body?: BaseSchema<any>; query?: BaseSchema<any>; params?: BaseSchema<any> }): Middleware {
+export function validate<L extends Record<string, unknown> = Record<string, unknown>>(schemas: { 
+  body?: BaseSchema<unknown>; 
+  query?: BaseSchema<unknown>; 
+  params?: BaseSchema<unknown> 
+}): Middleware<L> {
   return async (ctx, next) => {
     const errors: ValidationError[] = [];
     const validated: Record<string, unknown> = {};

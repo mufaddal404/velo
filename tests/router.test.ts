@@ -4,7 +4,7 @@ import { Router } from "../src/router.js";
 import { Velo } from "../src/server.js";
 
 test("Router - 1. Static route matches exactly", () => {
-  const router = new Router();
+  const router = new Router<unknown[]>();
   const handler = () => {};
   router.add("GET", "/users", [handler]);
   const { result } = router.match("GET", "/users");
@@ -12,7 +12,7 @@ test("Router - 1. Static route matches exactly", () => {
 });
 
 test("Router - 2. Named param extracted correctly", () => {
-  const router = new Router();
+  const router = new Router<unknown[]>();
   const handler = () => {};
   router.add("GET", "/users/:id", [handler]);
   const { result } = router.match("GET", "/users/42");
@@ -20,7 +20,7 @@ test("Router - 2. Named param extracted correctly", () => {
 });
 
 test("Router - 3. Two params in one route both extracted", () => {
-  const router = new Router();
+  const router = new Router<unknown[]>();
   const handler = () => {};
   router.add("GET", "/users/:id/posts/:postId", [handler]);
   const { result } = router.match("GET", "/users/42/posts/100");
@@ -29,7 +29,7 @@ test("Router - 3. Two params in one route both extracted", () => {
 });
 
 test("Router - 4. Wildcard captures remainder including slashes", () => {
-  const router = new Router();
+  const router = new Router<unknown[]>();
   const handler = () => {};
   router.add("GET", "/files/*", [handler]);
   const { result } = router.match("GET", "/files/a/b/c");
@@ -37,7 +37,7 @@ test("Router - 4. Wildcard captures remainder including slashes", () => {
 });
 
 test("Router - 5. Static segment beats param for identical path", () => {
-  const router = new Router();
+  const router = new Router<unknown[]>();
   const h1 = () => {};
   const h2 = () => {};
   router.add("GET", "/users/:id", [h1]);

@@ -24,16 +24,16 @@ export interface VeloOptions {
   };
 }
 
-interface RouteEntry<L = any> {
+interface RouteEntry<L extends Record<string, unknown>> {
   handlers: Middleware<L>[];
   scope: Velo<L>;
 }
 
-interface VeloInternalContext<L = any> extends Context<L> {
+interface VeloInternalContext<L extends Record<string, unknown>> extends Context<L> {
   _wsHandler?: WebSocketHandler;
 }
 
-export class Velo<L = any> {
+export class Velo<L extends Record<string, unknown> = Record<string, unknown>> {
   public server?: HttpServer | HttpsServer;
   public router: Router<RouteEntry<L>>;
   public wsRouter: Router<RouteEntry<L>>;
@@ -41,7 +41,7 @@ export class Velo<L = any> {
   protected _errorHandler?: ErrorHandler<L>;
   protected _notFoundHandler?: Handler<L>;
   
-  protected parent: Velo<any> | null = null;
+  protected parent: Velo<L> | null = null;
   protected basePath: string = "";
   protected connections = new Set<Socket | TLSSocket>();
   protected wsSockets = new WeakSet<Socket | TLSSocket>();
@@ -55,7 +55,7 @@ export class Velo<L = any> {
     return addr && typeof addr === "object" ? addr.port : undefined;
   }
 
-  constructor(protected _options: VeloOptions = {}, parent: Velo<any> | null = null, basePath: string = "") {
+  constructor(protected _options: VeloOptions = {}, parent: Velo<L> | null = null, basePath: string = "") {
     this.parent = parent;
     this.basePath = basePath;
     
@@ -65,8 +65,8 @@ export class Velo<L = any> {
     this._options.clock = _options.clock ?? Date.now;
 
     if (parent) {
-      this.router = parent.router as unknown as Router<RouteEntry<L>>;
-      this.wsRouter = parent.wsRouter as unknown as Router<RouteEntry<L>>;
+      this.router = parent.router;
+      this.wsRouter = parent.wsRouter;
       this.connections = parent.connections;
       this.wsSockets = parent.wsSockets;
     } else {
@@ -75,16 +75,32 @@ export class Velo<L = any> {
     }
   }
 
+  protected getLineage(from: Velo<L> = this): Velo<L>[] {
+    const lineage: Velo<L>[] = [];
+    let curr: Velo<L> | null = from;
+    while (curr) {
+      lineage.unshift(curr);
+      curr = curr.parent;
+    }
+    return lineage;
+  }
+
   // Helper to get effective handlers, traversing lineage if necessary
   protected get errorHandler(): ErrorHandler<L> {
-    if (this._errorHandler) return this._errorHandler;
-    if (this.parent) return this.parent.errorHandler as unknown as ErrorHandler<L>;
+    const lineage = this.getLineage();
+    for (let i = lineage.length - 1; i >= 0; i--) {
+        const handler = lineage[i]._errorHandler;
+        if (handler) return handler;
+    }
     return this.defaultErrorHandler.bind(this);
   }
 
   protected get notFoundHandler(): Handler<L> {
-    if (this._notFoundHandler) return this._notFoundHandler;
-    if (this.parent) return this.parent.notFoundHandler as unknown as Handler<L>;
+    const lineage = this.getLineage();
+    for (let i = lineage.length - 1; i >= 0; i--) {
+        const handler = lineage[i]._notFoundHandler;
+        if (handler) return handler;
+    }
     return () => { throw new NotFoundError(); };
   }
 
@@ -110,7 +126,7 @@ export class Velo<L = any> {
 
   ws(path: string, handler: WebSocketHandler) {
     const fullPath = this.basePath + path;
-    const entry: RouteEntry = {
+    const entry: RouteEntry<L> = {
       handlers: [this.wrapWebSocketHandler(handler)],
       scope: this
     };
@@ -254,20 +270,13 @@ export class Velo<L = any> {
     });
   }
 
-  protected getRoot(): Velo<any> {
-    let curr: Velo<any> = this;
-    while (curr.parent) curr = curr.parent;
-    return curr;
+  protected getRoot(): Velo<L> {
+    return this.getLineage()[0];
   }
 
-  protected getMiddlewarePipeline(path: string, scope: Velo<any>): Middleware<L>[] {
+  protected getMiddlewarePipeline(path: string, scope: Velo<L>): Middleware<L>[] {
     const pipeline: Middleware<L>[] = [];
-    const lineage: Velo<any>[] = [];
-    let curr: Velo<any> | null = scope;
-    while (curr) {
-      lineage.unshift(curr);
-      curr = curr.parent;
-    }
+    const lineage = this.getLineage(scope);
 
     for (const s of lineage) {
       for (const mw of s.middlewares) {
@@ -404,7 +413,7 @@ export class Velo<L = any> {
     }
   }
 
-  async register<T>(plugin: Plugin<T>, options?: T) {
+  async register<T>(plugin: Plugin<T, L>, options?: T) {
     const scope = this.scope();
     await plugin(scope, options as T);
   }

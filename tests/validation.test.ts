@@ -109,11 +109,11 @@ test("Validation - 62. validate() middleware returns 422 with structured errors 
 
 test("Validation - 63. validate() attaches parsed data to ctx.req.locals.validated", async () => {
   const app = new Velo();
-  let validated: any = null;
+  let validated: Record<string, unknown> | undefined = undefined;
   app.post("/test", validate({
     body: v.object({ name: v.string() })
   }), (ctx: Context) => {
-    validated = (ctx.req.locals as any).validated;
+    validated = ctx.req.locals.validated;
     ctx.res.send("ok");
   });
   
@@ -125,7 +125,7 @@ test("Validation - 63. validate() attaches parsed data to ctx.req.locals.validat
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Bob" })
     });
-    assert.deepStrictEqual(validated.body, { name: "Bob" });
+    assert.deepStrictEqual(validated?.["body"], { name: "Bob" });
   } finally {
     await app.close();
   }
@@ -139,8 +139,12 @@ test("Validation - BodyAlreadyConsumedError if json() called after validate() wi
     try {
       await ctx.req.json();
       ctx.res.send("ok");
-    } catch (e: any) {
-      ctx.res.status(500).send(e.name);
+    } catch (e: unknown) {
+      if (e instanceof Error) {
+        ctx.res.status(500).send(e.name);
+      } else {
+        ctx.res.status(500).send("Unknown Error");
+      }
     }
   });
   
