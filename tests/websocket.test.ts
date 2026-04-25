@@ -481,3 +481,31 @@ test("WebSocket - Nested middleware lineage collection", async () => {
     await app.close();
   }
 });
+
+test("WebSocket - Rejects invalid Sec-WebSocket-Version", async () => {
+  const app = new Velo();
+  app.ws("/chat", { open() {}, message() {}, close() {} });
+  await app.listen(0);
+  const port = app.port!;
+  try {
+    const res = await new Promise<string>((resolve) => {
+      const socket = net.createConnection(port, "127.0.0.1", () => {
+        socket.write(
+          `GET /chat HTTP/1.1\r\n` +
+          `Host: 127.0.0.1:${port}\r\n` +
+          "Upgrade: websocket\r\n" +
+          "Connection: Upgrade\r\n" +
+          `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString("base64")}\r\n` +
+          "Sec-WebSocket-Version: 12\r\n\r\n"
+        );
+      });
+      socket.on("data", (data) => {
+        resolve(data.toString());
+        socket.destroy();
+      });
+    });
+    assert.ok(res.includes("400 Bad Request"));
+  } finally {
+    await app.close();
+  }
+});

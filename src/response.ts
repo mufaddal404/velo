@@ -103,7 +103,7 @@ export class Response implements VeloResponse {
   }
 
   json(data: unknown): void {
-    this.type("application/json");
+    if (!this.get("Content-Type")) this.type("application/json");
     this.send(data as string | Buffer | object);
   }
 

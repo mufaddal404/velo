@@ -29,8 +29,9 @@ export function handleUpgrade(ctx: Context, socket: Socket, head: Buffer, handle
   const key = req.header("sec-websocket-key");
   const upgrade = req.header("upgrade");
   const connection = req.header("connection");
+  const version = req.header("sec-websocket-version");
 
-  if (!key || upgrade?.toLowerCase() !== "websocket" || !connection?.toLowerCase().includes("upgrade")) {
+  if (!key || upgrade?.toLowerCase() !== "websocket" || !connection?.toLowerCase().includes("upgrade") || version !== "13") {
     socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
     socket.destroy();
     return;

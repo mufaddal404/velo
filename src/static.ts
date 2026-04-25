@@ -13,6 +13,7 @@ export interface StaticOptions {
   dotFiles?: "deny" | "ignore" | "allow";
   maxAge?: number;
   etag?: boolean;
+  maxRanges?: number;
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -39,6 +40,7 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
   const dotFiles = options.dotFiles || "deny";
   const maxAge = options.maxAge || 0;
   const useEtag = options.etag !== false;
+  const maxRanges = options.maxRanges || 10;
 
   const routePrefix = prefix.endsWith("/") ? prefix : prefix + "/";
   app.get(routePrefix + "*", async (ctx: Context) => {
@@ -136,6 +138,11 @@ export const staticFiles: Plugin<StaticOptions> = (app, options) => {
         if (start < stats.size && start <= end) {
           ranges.push({ start, end: Math.min(end, stats.size - 1) });
         }
+      }
+
+      if (ranges.length > maxRanges) {
+        ctx.res.status(400).send("Too many ranges");
+        return;
       }
 
       if (ranges.length === 0) {

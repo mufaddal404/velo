@@ -24,19 +24,19 @@ export interface VeloOptions {
   };
 }
 
-interface RouteEntry {
-  handlers: Middleware[];
-  scope: Velo;
+interface RouteEntry<L = any> {
+  handlers: Middleware<L>[];
+  scope: Velo<L>;
 }
 
-interface VeloInternalContext extends Context {
+interface VeloInternalContext<L = any> extends Context<L> {
   _wsHandler?: WebSocketHandler;
 }
 
 export class Velo<L = any> {
   public server?: HttpServer | HttpsServer;
-  public router: Router<RouteEntry>;
-  public wsRouter: Router<RouteEntry>;
+  public router: Router<RouteEntry<L>>;
+  public wsRouter: Router<RouteEntry<L>>;
   protected middlewares: { prefix: string; fn: Middleware<L> }[] = [];
   protected _errorHandler?: ErrorHandler<L>;
   protected _notFoundHandler?: Handler<L>;
@@ -65,26 +65,26 @@ export class Velo<L = any> {
     this._options.clock = _options.clock ?? Date.now;
 
     if (parent) {
-      this.router = parent.router;
-      this.wsRouter = parent.wsRouter;
+      this.router = parent.router as unknown as Router<RouteEntry<L>>;
+      this.wsRouter = parent.wsRouter as unknown as Router<RouteEntry<L>>;
       this.connections = parent.connections;
       this.wsSockets = parent.wsSockets;
     } else {
-      this.router = new Router<RouteEntry>();
-      this.wsRouter = new Router<RouteEntry>();
+      this.router = new Router<RouteEntry<L>>();
+      this.wsRouter = new Router<RouteEntry<L>>();
     }
   }
 
   // Helper to get effective handlers, traversing lineage if necessary
   protected get errorHandler(): ErrorHandler<L> {
     if (this._errorHandler) return this._errorHandler;
-    if (this.parent) return this.parent.errorHandler as ErrorHandler<L>;
+    if (this.parent) return this.parent.errorHandler as unknown as ErrorHandler<L>;
     return this.defaultErrorHandler.bind(this);
   }
 
   protected get notFoundHandler(): Handler<L> {
     if (this._notFoundHandler) return this._notFoundHandler;
-    if (this.parent) return this.parent.notFoundHandler as Handler<L>;
+    if (this.parent) return this.parent.notFoundHandler as unknown as Handler<L>;
     return () => { throw new NotFoundError(); };
   }
 
@@ -118,18 +118,18 @@ export class Velo<L = any> {
     return this;
   }
 
-  private wrapWebSocketHandler(handler: WebSocketHandler): Middleware {
+  private wrapWebSocketHandler(handler: WebSocketHandler): Middleware<L> {
     return async (ctx, next) => {
       // This is a marker for handleUpgrade to find the handler
-      (ctx as VeloInternalContext)._wsHandler = handler;
+      (ctx as VeloInternalContext<L>)._wsHandler = handler;
       await next();
     };
   }
 
   private addRoute(method: string, path: string, handlers: (Handler<L> | Middleware<L>)[]) {
     const fullPath = this.basePath + path;
-    const entry: RouteEntry = {
-      handlers: handlers as Middleware[],
+    const entry: RouteEntry<L> = {
+      handlers: handlers as Middleware<L>[],
       scope: this
     };
     this.router.add(method, fullPath, entry);
@@ -169,10 +169,70 @@ export class Velo<L = any> {
       
       root.server.on("connection", (socket: Socket) => {
         root.connections.add(socket);
+        
+        // Manual headers timeout
+        if (root._options.headersTimeout) {
+          let buffer = "";
+          let timeout = setTimeout(() => {
+            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+              socket.destroy();
+            }
+          }, root._options.headersTimeout);
+
+          const onData = (chunk: Buffer) => {
+            buffer += chunk.toString("latin1");
+            if (buffer.includes("\r\n\r\n")) {
+              clearTimeout(timeout);
+              socket.removeListener("data", onData);
+            } else {
+              // Restart timeout as we received some data but not all headers
+              clearTimeout(timeout);
+              timeout = setTimeout(() => {
+                if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+                  socket.destroy();
+                }
+              }, root._options.headersTimeout);
+            }
+          };
+
+          socket.on("data", onData);
+          socket.on("close", () => clearTimeout(timeout));
+        }
+
         socket.on("close", () => root.connections.delete(socket));
       });
       root.server.on("secureConnection", (socket: TLSSocket) => {
         root.connections.add(socket);
+
+        // Manual headers timeout
+        if (root._options.headersTimeout) {
+          let buffer = "";
+          let timeout = setTimeout(() => {
+            if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+              socket.destroy();
+            }
+          }, root._options.headersTimeout);
+
+          const onData = (chunk: Buffer) => {
+            buffer += chunk.toString("latin1");
+            if (buffer.includes("\r\n\r\n")) {
+              clearTimeout(timeout);
+              socket.removeListener("data", onData);
+            } else {
+              // Restart timeout as we received some data but not all headers
+              clearTimeout(timeout);
+              timeout = setTimeout(() => {
+                if (root.connections.has(socket) && !root.wsSockets.has(socket)) {
+                  socket.destroy();
+                }
+              }, root._options.headersTimeout);
+            }
+          };
+
+          socket.on("data", onData);
+          socket.on("close", () => clearTimeout(timeout));
+        }
+
         socket.on("close", () => root.connections.delete(socket));
       });
       root.server.on("upgrade", (req, socket, head) => {
@@ -208,8 +268,8 @@ export class Velo<L = any> {
     }
 
     // Node.js 18.2.0+ supports closeIdleConnections()
-    if (typeof (root.server as any).closeIdleConnections === "function") {
-      (root.server as any).closeIdleConnections();
+    if (root.server && "closeIdleConnections" in root.server && typeof root.server.closeIdleConnections === "function") {
+      (root.server as HttpServer & { closeIdleConnections: () => void }).closeIdleConnections();
     }
     
     return new Promise((resolve, reject) => {
@@ -319,7 +379,7 @@ export class Velo<L = any> {
 
     pipeline.push(...(handlers as Middleware<L>[]));
     pipeline.push(async (c) => {
-        wsHandler = (c as VeloInternalContext)._wsHandler;
+        wsHandler = (c as VeloInternalContext<L>)._wsHandler;
         if (wsHandler) {
             // If it's a websocket upgrade, we should NOT have sent a response yet
             if (!vRes.sent) {

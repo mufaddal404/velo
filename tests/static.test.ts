@@ -293,3 +293,19 @@ test("Static - Multiple Ranges (multipart/byteranges)", async () => {
     await app.close();
   }
 });
+
+test("Static - Too many ranges rejected", async () => {
+  const app = new Velo();
+  app.register(staticFiles, { root: PUBLIC_DIR, maxRanges: 2 });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    const res = await fetch(`http://localhost:${port}/multi-range.txt`, {
+      headers: { "Range": "bytes=0-1, 5-6, 10-11" }
+    });
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(await res.text(), "Too many ranges");
+  } finally {
+    await app.close();
+  }
+});

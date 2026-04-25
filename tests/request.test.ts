@@ -251,3 +251,21 @@ test("Request - 24.2. protocol reflects correct hop in X-Forwarded-Proto when tr
     }
 });
 
+test("Request - cookies should be decoded correctly", async () => {
+  const app = new Velo();
+  let cookies: any = null;
+  app.get("/", (ctx: Context) => {
+    cookies = ctx.req.cookies;
+    ctx.res.send("ok");
+  });
+  await app.listen(0);
+  const port = app.port;
+  try {
+    await fetch(`http://localhost:${port}/`, {
+      headers: { "Cookie": "user=John%20Doe; city=New%20York" }
+    });
+    assert.deepStrictEqual(cookies, { user: "John Doe", city: "New York" });
+  } finally {
+    await app.close();
+  }
+});

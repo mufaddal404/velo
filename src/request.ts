@@ -20,12 +20,12 @@ export interface VeloRequest<L = any> {
   secure: boolean;
   xhr: boolean;
   cookies: Record<string, string>;
-  locals: Partial<L>;
+  locals: Partial<L> & { validated?: Record<string, unknown> };
 }
 
 export class Request<L = any> implements VeloRequest<L> {
   public params: Record<string, string> = {};
-  public locals: Partial<L> = {};
+  public locals: Partial<L> & { validated?: Record<string, unknown> } = {};
   private _body: Buffer | null = null;
   private _bodyConsumed = false;
 
@@ -152,8 +152,14 @@ export class Request<L = any> implements VeloRequest<L> {
       const index = pair.indexOf("=");
       if (index === -1) return;
       const key = pair.slice(0, index).trim();
-      const value = pair.slice(index + 1).trim();
-      if (key) cookies[key] = value;
+      let value = pair.slice(index + 1).trim();
+      if (key) {
+        try {
+          cookies[key] = decodeURIComponent(value);
+        } catch (e) {
+          cookies[key] = value;
+        }
+      }
     });
     return cookies;
   }
