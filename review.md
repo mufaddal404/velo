@@ -75,3 +75,6 @@ The tests use Node's built-in `node:test` and `node:assert` as requested. They c
 
 ### Conclusion
 The Velo library is a secure, well-architected, and robust implementation of a low-level HTTP server. No critical vulnerabilities or type system workarounds were discovered during this review.
+
+-----------------------------------------------------------------
+**Concurrent Request Stress**: No tests for high concurrency or race conditions during graceful shutdown.
