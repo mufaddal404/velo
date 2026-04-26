@@ -38,6 +38,14 @@
     "router",
     "typescript"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mufaddal404/velo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mufaddal404/velo/issues"
+  },
+  "homepage": "https://github.com/mufaddal404/velo#readme",
   "author": "Mufaddal (https://github.com/mufaddal404)",
   "license": "MIT",
   "devDependencies": {
