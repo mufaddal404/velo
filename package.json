@@ -1,24 +1,45 @@
 {
-  "name": "velo",
+  "name": "velo-http",
   "version": "1.0.0",
   "description": "A low-level Node.js HTTP server library",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "exports": {
-    ".": "./dist/index.js",
-    "./validation": "./dist/validation.js",
-    "./static": "./dist/static.js",
-    "./server": "./dist/server.js",
-    "./request": "./dist/request.js",
-    "./response": "./dist/response.js",
-    "./middleware": "./dist/middleware.js",
-    "./plugin": "./dist/plugin.js",
-    "./errors": "./dist/errors.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
   },
   "scripts": {
+    "clean": "rm -rf dist",
     "test": "node --test --import tsx tests/*.test.ts",
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
   },
+  "keywords": [
+    "velo",
+    "http",
+    "server",
+    "framework",
+    "router",
+    "typescript"
+  ],
+  "author": "Mufaddal (https://github.com/mufaddal404)",
+  "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.19.39",
     "tsx": "^4.21.0",
