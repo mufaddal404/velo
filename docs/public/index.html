@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Velo | High-Performance Kernel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="glow"></div>
+    
+    <header>
+        <div class="badge">SERVER STATUS: OPTIMAL</div>
+        <h1>VELO<span>.</span></h1>
+        <p>You are currently being served by a zero-dependency, low-level Node.js HTTP kernel.</p>
+        <div class="links">
+            <a href="https://www.npmjs.com/package/velo-http" target="_blank" class="link-btn">NPM</a>
+            <a href="https://github.com/mufaddal404/velo" target="_blank" class="link-btn">GITHUB</a>
+        </div>
+    </header>
+
+    <main class="grid">
+        <!-- Latency Card -->
+        <div class="card" id="latency-card">
+            <div class="card-header">
+                <h3>⚡ Velocity Test</h3>
+                <div class="pulse"></div>
+            </div>
+            <p>Measure round-trip time between browser and kernel.</p>
+            <div class="config-row">
+                <label for="iterations">SYNC DEPTH:</label>
+                <div class="input-group">
+                    <input type="number" id="iterations" value="10" min="1" max="100">
+                    <span id="range-error" class="error-msg">Max: 100</span>
+                </div>
+            </div>
+            <div class="meter">
+                <div class="meter-bar" id="latency-bar"></div>
+            </div>
+            <button id="test-btn">RUN BENCHMARK</button>
+            <div id="result">Ready to sync...</div>
+        </div>
+
+        <!-- Headers Card -->
+        <div class="card">
+            <h3>🛡️ Kernel Perception</h3>
+            <p>This is exactly how Velo sees your request headers in real-time.</p>
+            <pre id="headers-display">Analyzing packet...</pre>
+        </div>
+
+        <!-- Stats Card -->
+        <div class="card">
+            <h3>🔍 Server Intel</h3>
+            <p>Live metrics from the Velo instance.</p>
+            <div class="stats-row">
+                <div class="stat">
+                    <span class="label">UPTIME</span>
+                    <span class="value" id="uptime">-</span>
+                </div>
+                <div class="stat">
+                    <span class="label">SYSTEM COST (RSS)</span>
+                    <span class="value" id="memory-rss">-</span>
+                </div>
+            </div>
+            <div class="stat">
+                <span class="label">APP LOGIC (HEAP USED)</span>
+                <span class="value" id="memory-heap">-</span>
+            </div>
+            <div class="stat">
+                <span class="label">ENGINE</span>
+                <span class="value">Velo v1.0.0 (Native ESM)</span>
+            </div>
+        </div>
+    </main>
+
+    <section class="source-section">
+        <div class="card source-card">
+            <div class="card-header">
+                <h3>📂 Kernel Vision</h3>
+                <div class="source-controls">
+                    <select id="theme-selector" class="theme-select">
+                        <option value="classic">Classic</option>
+                        <option value="velo-green">Velo Green (Highlit)</option>
+                        <option value="one-dark">One Dark</option>
+                        <option value="cyberpunk">Cyberpunk</option>
+                    </select>
+                    <button id="view-source-btn" style="width: auto; padding: 8px 16px;">REVEAL RUNNING CODE</button>
+                </div>
+            </div>
+            <div id="source-container" class="hidden">
+                <div class="file-tab">prod.js</div>
+                <pre id="source-display"></pre>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <p>Built with <strong>Velo</strong> • No Frameworks • Pure Performance</p>
+    </footer>
+
+    <script src="script.js"></script>
+</body>
+</html>

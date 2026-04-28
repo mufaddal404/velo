@@ -1,0 +1,16 @@
+{
+  "name": "velo-docs",
+  "version": "1.0.0",
+  "description": "Velo Docs - served via web server written in Velo.",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node .",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "velo-http": "^1.0.0"
+  }
+}
